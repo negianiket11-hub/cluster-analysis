@@ -25,9 +25,33 @@ from sklearn.preprocessing import StandardScaler
 print("Loading pre-computed data files…")
 import json as _json
 
-df_raw_dedup       = pd.read_parquet("data/df_raw_dedup.parquet")
-df_txn             = pd.read_parquet("data/df_txn.parquet")
-df_cust            = pd.read_parquet("data/df_cust.parquet")
+# Load only the columns each DataFrame actually needs to keep RAM under 512 MB
+df_raw_dedup = pd.read_parquet(
+    "data/df_raw_dedup.parquet",
+    columns=["InvoiceDate", "IsCancelled", "Country", "InvoiceNo", "Month"],
+)
+df_raw_dedup["Country"]   = df_raw_dedup["Country"].astype("category")
+df_raw_dedup["InvoiceNo"] = df_raw_dedup["InvoiceNo"].astype("category")
+
+df_txn = pd.read_parquet(
+    "data/df_txn.parquet",
+    columns=["InvoiceDate", "Country", "Quantity", "UnitPrice",
+             "CustomerID", "Revenue", "Hour", "DayCode", "TxnCluster"],
+)
+df_txn["Country"]    = df_txn["Country"].astype("category")
+df_txn["TxnCluster"] = df_txn["TxnCluster"].astype("category")
+
+df_cust = pd.read_parquet(
+    "data/df_cust.parquet",
+    columns=["InvoiceDate", "Country", "Revenue", "InvoiceNo",
+             "CustomerID", "Description", "Month", "DayOfWeek", "Hour", "Quantity"],
+)
+df_cust["Country"]    = df_cust["Country"].astype("category")
+df_cust["DayOfWeek"]  = df_cust["DayOfWeek"].astype("category")
+df_cust["Description"]= df_cust["Description"].astype("category")
+
+gc.collect()
+
 rfm_full           = pd.read_parquet("data/rfm_full.parquet")
 abc_all            = pd.read_parquet("data/abc_all.parquet")
 abc_summary        = pd.read_parquet("data/abc_summary.parquet")
@@ -734,11 +758,9 @@ app.layout = html.Div(
 def _apply_filter(country, start, end):
     s, e = pd.to_datetime(start).date(), pd.to_datetime(end).date()
     mc = df_cust["InvoiceDate"].dt.date.between(s, e)
-    mt = df_txn["InvoiceDate"].dt.date.between(s, e)
     if country != "ALL":
-        mc &= df_cust["Country"] == country
-        mt &= df_txn["Country"]  == country
-    return df_cust[mc].copy(), df_txn[mt].copy()
+        mc &= (df_cust["Country"] == country)
+    return df_cust[mc].copy()
 
 def _apply_layout(fig, xtitle="", ytitle="", title=""):
     fig.update_layout(**BASE_LAYOUT, title=dict(text=title, font_size=13, x=0, xanchor="left"))
@@ -766,7 +788,7 @@ def reset_filters(_):
     Input("filter-dates",   "end_date"),
 )
 def update_kpis(country, start, end):
-    dc, _ = _apply_filter(country, start, end)
+    dc = _apply_filter(country, start, end)
     rev    = dc["Revenue"].sum()
     orders = dc["InvoiceNo"].nunique()
     custs  = int(dc["CustomerID"].nunique())
@@ -787,7 +809,7 @@ def update_kpis(country, start, end):
     Input("filter-dates",   "end_date"),
 )
 def update_monthly(country, start, end):
-    dc, _ = _apply_filter(country, start, end)
+    dc = _apply_filter(country, start, end)
     m = dc.groupby("Month")["Revenue"].sum().reset_index()
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -809,7 +831,7 @@ def update_monthly(country, start, end):
     Input("filter-dates",   "end_date"),
 )
 def update_country(country, start, end):
-    dc, _ = _apply_filter(country, start, end)
+    dc = _apply_filter(country, start, end)
     top = dc.groupby("Country")["Revenue"].sum().nlargest(10).reset_index()
     fig = go.Figure(go.Bar(
         x=top["Revenue"], y=top["Country"], orientation="h",
@@ -829,7 +851,7 @@ def update_country(country, start, end):
     Input("filter-dates",   "end_date"),
 )
 def update_products(country, start, end):
-    dc, _ = _apply_filter(country, start, end)
+    dc = _apply_filter(country, start, end)
     top = dc.groupby("Description")["Revenue"].sum().nlargest(15).reset_index()
     fig = go.Figure(go.Bar(
         x=top["Revenue"], y=top["Description"], orientation="h",
@@ -849,7 +871,7 @@ def update_products(country, start, end):
     Input("filter-dates",   "end_date"),
 )
 def update_heatmap(country, start, end):
-    dc, _ = _apply_filter(country, start, end)
+    dc = _apply_filter(country, start, end)
     days  = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
     hours = list(range(24))
     pivot = dc.pivot_table(values="Revenue", index="DayOfWeek",
@@ -874,7 +896,7 @@ def update_heatmap(country, start, end):
     Input("filter-dates",   "end_date"),
 )
 def update_abc(country, start, end):
-    dc, _ = _apply_filter(country, start, end)
+    dc = _apply_filter(country, start, end)
     a = (dc.groupby("Description")["Revenue"].sum()
          .sort_values(ascending=False).reset_index())
     a["CumPct"] = a["Revenue"].cumsum() / a["Revenue"].sum() * 100
@@ -1622,7 +1644,11 @@ def update_txn_timing(_):
     Input("filter-dates",   "end_date"),
 )
 def update_boxplots(country, start, end):
-    _, dt = _apply_filter(country, start, end)
+    s, e = pd.to_datetime(start).date(), pd.to_datetime(end).date()
+    mt = df_txn["InvoiceDate"].dt.date.between(s, e)
+    if country != "ALL":
+        mt &= (df_txn["Country"] == country)
+    dt = df_txn[mt]
     cfg = [
         ("Quantity",  "Quantity (units per transaction line)", PALETTE[0]),
         ("UnitPrice", "Unit Price (GBP £ per unit)",           PALETTE[1]),
@@ -1656,7 +1682,7 @@ def update_boxplots(country, start, end):
     Input("filter-dates",   "end_date"),
 )
 def update_aov_trend(country, start, end):
-    dc, _ = _apply_filter(country, start, end)
+    dc = _apply_filter(country, start, end)
     m = dc.groupby("Month").agg(
         Revenue=("Revenue", "sum"),
         Orders =("InvoiceNo", "nunique"),
@@ -1682,7 +1708,7 @@ def update_aov_trend(country, start, end):
     Input("filter-dates",   "end_date"),
 )
 def update_basket_trend(country, start, end):
-    dc, _ = _apply_filter(country, start, end)
+    dc = _apply_filter(country, start, end)
     inv_qty = dc.groupby(["Month", "InvoiceNo"])["Quantity"].sum().reset_index()
     m = inv_qty.groupby("Month")["Quantity"].mean().reset_index()
     m.columns = ["Month", "AvgBasket"]
