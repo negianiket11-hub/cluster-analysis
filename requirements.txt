@@ -3,6 +3,5 @@ numpy
 scikit-learn
 scipy
 plotly
-dash
-dash-bootstrap-components
+streamlit
 pyarrow
