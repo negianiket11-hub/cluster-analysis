@@ -11,6 +11,19 @@ cluster-analysis/
 ├── Online Retail(1).csv   # Raw dataset (541,909 transactions)
 ├── main.ipynb             # Analysis notebook
 ├── dashboard.py           # Interactive Dash dashboard
+├── precompute.py          # Run once locally to generate data/ files
+├── requirements.txt       # Python dependencies
+├── data/                  # Pre-computed parquet files (~8MB total)
+│   ├── df_cust.parquet
+│   ├── df_txn.parquet
+│   ├── df_raw_dedup.parquet
+│   ├── rfm_full.parquet
+│   ├── profile.parquet
+│   ├── seg_revenue.parquet
+│   ├── abc_all.parquet
+│   ├── abc_summary.parquet
+│   ├── missing_by_country.parquet
+│   └── meta.json
 └── README.md
 ```
 
@@ -92,14 +105,18 @@ All features are 99th-percentile capped, log-transformed (except Recency), and S
 
 ## Dashboard (`dashboard.py`)
 
-Built with **Dash + Plotly + dash-bootstrap-components**. Run with:
+Built with **Dash + Plotly + dash-bootstrap-components**.
+
+### Running Locally
 
 ```bash
-pip install dash dash-bootstrap-components plotly pandas numpy scikit-learn scipy
+pip install -r requirements.txt
 python dashboard.py
 ```
 
 Then open **http://127.0.0.1:8050** in your browser.
+
+> The `data/` folder is already committed — no need to run `precompute.py` unless you change the raw data.
 
 ### Tab 1 — Overview
 - Monthly revenue trend
@@ -138,6 +155,30 @@ Then open **http://127.0.0.1:8050** in your browser.
 
 ---
 
+## Deploying on Render (Free Tier)
+
+1. Go to **render.com** → New → Web Service → connect this GitHub repo
+2. Set **Build Command:** `pip install -r requirements.txt`
+3. Set **Start Command:** `python dashboard.py`
+4. Set **Instance Type:** Free
+5. Click Deploy
+
+The `data/` folder is pre-committed so Render loads ~8MB of parquet files at startup instead of reprocessing the raw CSV. This keeps startup RAM well under Render's 512MB free tier limit.
+
+> If you update the raw data, run `python precompute.py` locally and push the new `data/` files to GitHub before redeploying.
+
+---
+
+## `precompute.py`
+
+Runs the full data pipeline (cleaning, RFM, K-Means, DBSCAN, PCA, transaction clustering) and saves results to `data/` as parquet files. Only needs to be re-run if the raw dataset changes.
+
+```bash
+python precompute.py
+```
+
+---
+
 ## Key Technical Decisions
 
 | Decision | Reason |
@@ -148,6 +189,7 @@ Then open **http://127.0.0.1:8050** in your browser.
 | ABC at 80%/95% | Standard Pareto principle; consistent between notebook and dashboard |
 | DBSCAN eps=0.8 fixed | Auto percentile on k-distance graph was unreliable for this dataset |
 | Transaction clustering excludes Revenue | Revenue = Quantity × Price introduces multicollinearity |
+| Pre-computed parquet files | Avoids 700MB RAM spike from processing raw CSV on deployment |
 
 ---
 
@@ -158,9 +200,8 @@ pandas
 numpy
 scikit-learn
 scipy
-matplotlib
-seaborn
 plotly
 dash
 dash-bootstrap-components
+pyarrow
 ```
