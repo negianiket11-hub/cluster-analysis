@@ -858,12 +858,13 @@ with tab2:
     with c8:
         seg_counts = rfm_full.groupby("Segment").agg(
             CustomerCount=("Monetary", "count"),
-            TotalRevenue =("Monetary", "sum"),
             AvgRecency   =("Recency",  "mean"),
             AvgFrequency =("Frequency","mean"),
             AvgAOV       =("AOV",      "mean"),
         ).reset_index().round(1)
-        seg_counts = seg_counts.merge(seg_revenue[["Segment","RevPct"]], on="Segment", how="left")
+        seg_counts = seg_counts.merge(
+            seg_revenue[["Segment", "TotalRevenue", "RevPct"]], on="Segment", how="left"
+        )
         fig = go.Figure()
         for ci, row in seg_counts.iterrows():
             is_sel = (row["Segment"] == seg)
@@ -950,11 +951,14 @@ with tab2:
         avg     = rfm_full[["Recency","Frequency","Monetary","AOV","BasketSize","Tenure"]].mean()
 
         def delta_str(val, avg_val, lower_better=False):
-            diff  = val - avg_val
-            pct   = diff / avg_val * 100 if avg_val else 0
-            arrow = "▲" if diff > 0 else "▼"
-            sign  = "+" if diff > 0 else ""
-            return f"{arrow} {sign}{pct:.0f}% vs avg"
+            diff = val - avg_val
+            pct  = diff / avg_val * 100 if avg_val else 0
+            # For lower-is-better metrics (e.g. Recency), flip sign so
+            # Streamlit colours the delta green when the value is below average
+            display_pct = -pct if lower_better else pct
+            arrow = "▲" if display_pct > 0 else "▼"
+            sign  = "+" if display_pct > 0 else ""
+            return f"{arrow} {sign}{display_pct:.0f}% vs avg"
 
         st.markdown(f"### {info['icon']} {seg}")
         m1, m2, m3, m4, m5, m6, m7, m8 = st.columns(8)
