@@ -4,6 +4,7 @@ Run:  python dashboard.py  →  open  http://127.0.0.1:8050
 """
 
 import os
+import gc
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -32,13 +33,22 @@ df_raw = pd.read_csv(
     encoding="utf-8-sig",
     parse_dates=["InvoiceDate"],
     dayfirst=True,
+    dtype={"Quantity": "int32", "UnitPrice": "float32"},
 )
 df_raw["IsCancelled"] = df_raw["InvoiceNo"].astype(str).str.startswith("C")
+
+# Raw deduplicated for cancellation analysis — built before filtering
+df_raw_dedup = df_raw.drop_duplicates().copy()
+df_raw_dedup["Month"] = df_raw_dedup["InvoiceDate"].dt.to_period("M").dt.to_timestamp()
 
 df = df_raw.drop_duplicates()
 df = df[~df["InvoiceNo"].astype(str).str.startswith("C")]
 df = df[(df["Quantity"] > 0) & (df["UnitPrice"] > 0)]
 df = df.dropna(subset=["Description"])
+
+# Free raw data — no longer needed
+del df_raw
+gc.collect()
 
 # Transaction-level (includes missing CustomerID)
 df_txn = df.reset_index(drop=True).copy()
@@ -55,9 +65,9 @@ df_cust["DayOfWeek"] = df_cust["InvoiceDate"].dt.day_name()
 df_cust["Hour"]      = df_cust["InvoiceDate"].dt.hour
 df_cust["Month"]     = df_cust["InvoiceDate"].dt.to_period("M").dt.to_timestamp()
 
-# Raw deduplicated for cancellation analysis
-df_raw_dedup = df_raw.drop_duplicates().copy()
-df_raw_dedup["Month"] = df_raw_dedup["InvoiceDate"].dt.to_period("M").dt.to_timestamp()
+# Free intermediate cleaned df — df_txn and df_cust are the keepers
+del df
+gc.collect()
 
 ALL_COUNTRIES = sorted(df_cust["Country"].unique().tolist())
 MIN_DATE      = df_cust["InvoiceDate"].min().date()
@@ -119,13 +129,15 @@ for col in ["Frequency_capped", "Monetary_capped", "AOV_capped",
     rfm_log[col] = np.log1p(rfm_log[col])
 
 X_rfm = StandardScaler().fit_transform(rfm_log)
+del rfm_log
+gc.collect()
 
 # Elbow + Silhouette scores
 K_RANGE     = list(range(2, 9))
 inertia_rfm = []
 sil_rfm     = []
 for k in K_RANGE:
-    km     = KMeans(n_clusters=k, random_state=42, n_init=10)
+    km     = KMeans(n_clusters=k, random_state=42, n_init=3)
     labels = km.fit_predict(X_rfm)
     inertia_rfm.append(km.inertia_)
     sil_rfm.append(silhouette_score(X_rfm, labels))
@@ -135,13 +147,13 @@ for k in K_RANGE:
 best_k   = 4
 best_sil = sil_rfm[K_RANGE.index(best_k)]
 
-km_rfm              = KMeans(n_clusters=best_k, random_state=42, n_init=10)
+km_rfm              = KMeans(n_clusters=best_k, random_state=42, n_init=3)
 rfm_full["Cluster"] = km_rfm.fit_predict(X_rfm)
 
 db_score  = davies_bouldin_score(X_rfm, rfm_full["Cluster"])
 ari_score = adjusted_rand_score(
     rfm_full["Cluster"],
-    KMeans(n_clusters=best_k, random_state=99, n_init=10).fit_predict(X_rfm)
+    KMeans(n_clusters=best_k, random_state=99, n_init=3).fit_predict(X_rfm)
 )
 
 profile = rfm_full.groupby("Cluster")[
@@ -184,6 +196,10 @@ rfm_full["DBSCAN"]  = DBSCAN(eps=0.8, min_samples=5).fit_predict(X_rfm).astype(s
 n_dbscan_clusters   = len(set(rfm_full["DBSCAN"].unique()) - {"-1"})
 n_dbscan_noise      = int((rfm_full["DBSCAN"] == "-1").sum())
 
+# Free RFM feature matrix — no longer needed after clustering
+del X_rfm
+gc.collect()
+
 # ══════════════════════════════════════════════════════════
 # 5. TRANSACTION CLUSTERING (4 FEATURES: Qty, Price, Hour, DayCode)
 # ══════════════════════════════════════════════════════════
@@ -200,13 +216,17 @@ X_txn_scaled = StandardScaler().fit_transform(X_txn_raw)
 np.random.seed(42)
 idx_s = np.random.choice(len(X_txn_scaled), size=min(30_000, len(X_txn_scaled)), replace=False)
 sil_t = [silhouette_score(X_txn_scaled[idx_s],
-                          KMeans(n_clusters=k, random_state=42, n_init=10)
+                          KMeans(n_clusters=k, random_state=42, n_init=3)
                           .fit_predict(X_txn_scaled[idx_s]))
          for k in range(2, 8)]
 
 best_k_txn           = list(range(2, 8))[int(np.argmax(sil_t))]
-df_txn["TxnCluster"] = (KMeans(n_clusters=best_k_txn, random_state=42, n_init=10)
+df_txn["TxnCluster"] = (KMeans(n_clusters=best_k_txn, random_state=42, n_init=3)
                         .fit_predict(X_txn_scaled).astype(str))
+
+# Free transaction feature matrices — no longer needed after clustering
+del X_txn_raw, X_txn_scaled, idx_s, sil_t
+gc.collect()
 
 print(f"RFM clusters: {best_k}  |  Txn clusters: {best_k_txn}")
 print(f"DB score: {db_score:.3f}  |  ARI: {ari_score:.3f}  |  Silhouette: {best_sil:.3f}")
