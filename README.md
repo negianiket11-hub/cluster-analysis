@@ -1,5 +1,7 @@
 # Retail Customer Cluster Analysis
 
+**Live Demo:** [cluster-analysis-szhed9w9b3dhfxouepzsoh.streamlit.app](https://cluster-analysis-szhed9w9b3dhfxouepzsoh.streamlit.app)
+
 An end-to-end customer segmentation project built on the [UCI Online Retail dataset](https://archive.ics.uci.edu/ml/datasets/online+retail). Includes a Jupyter notebook for full analysis and an interactive Streamlit dashboard for exploration.
 
 ---
