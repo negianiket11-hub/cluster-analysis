@@ -1,6 +1,6 @@
 # Retail Customer Cluster Analysis
 
-An end-to-end customer segmentation project built on the [UCI Online Retail dataset](https://archive.ics.uci.edu/ml/datasets/online+retail). Includes a Jupyter notebook for full analysis and an interactive Dash dashboard for exploration.
+An end-to-end customer segmentation project built on the [UCI Online Retail dataset](https://archive.ics.uci.edu/ml/datasets/online+retail). Includes a Jupyter notebook for full analysis and an interactive Streamlit dashboard for exploration.
 
 ---
 
@@ -8,11 +8,12 @@ An end-to-end customer segmentation project built on the [UCI Online Retail data
 
 ```
 cluster-analysis/
-├── Online Retail(1).csv   # Raw dataset (541,909 transactions)
-├── main.ipynb             # Analysis notebook
-├── dashboard.py           # Interactive Dash dashboard
+├── app.py                 # Interactive Streamlit dashboard
+├── main.ipynb             # Full analysis notebook
 ├── precompute.py          # Run once locally to generate data/ files
 ├── requirements.txt       # Python dependencies
+├── .streamlit/
+│   └── config.toml        # Light theme configuration
 ├── data/                  # Pre-computed parquet files (~8MB total)
 │   ├── df_cust.parquet
 │   ├── df_txn.parquet
@@ -103,67 +104,68 @@ All features are 99th-percentile capped, log-transformed (except Recency), and S
 
 ---
 
-## Dashboard (`dashboard.py`)
+## Dashboard (`app.py`)
 
-Built with **Dash + Plotly + dash-bootstrap-components**.
+Built with **Streamlit + Plotly**. Fully interactive with sidebar filters (country, date range) and per-tab segment filters.
 
 ### Running Locally
 
 ```bash
 pip install -r requirements.txt
-python dashboard.py
+python -m streamlit run app.py
 ```
 
-Then open **http://127.0.0.1:8050** in your browser.
+Then open **http://localhost:8501** in your browser.
 
 > The `data/` folder is already committed — no need to run `precompute.py` unless you change the raw data.
 
 ### Tab 1 — Overview
+- KPI strip: Total Revenue, Unique Orders, Known Customers, Avg. Order Value
 - Monthly revenue trend
 - Revenue by country (top 10)
 - Top 15 products by revenue
 - Revenue heatmap (day of week × hour)
 - ABC / Pareto chart (dual axis: bar + cumulative %)
 - Monthly cancellation rate
+- Key Insights + Actionable Recommendations panel after each chart
 
 ### Tab 2 — Customer Segments
 - Validation KPIs: k, Silhouette score, Davies-Bouldin score, ARI
-- Segment filter dropdown (ALL / Champions / Loyal Customers / At-Risk / Lapsed)
-- Cluster profiles table
-- Radar chart (6-axis, all 4 segments)
+- Segment filter (ALL / Champions / Loyal Customers / At-Risk / Lapsed)
+- Cluster profiles table + feature bar chart
+- Radar chart (6-axis, all 4 segments, [0.1–0.9] scaled)
 - Scatter plots: Recency vs Monetary, Frequency vs Monetary
 - PCA 2D projection
 - DBSCAN cluster view
 - RFM feature distributions
 - Revenue contribution donut by segment
 - Segment size vs revenue bubble chart
-- **Segment Deep Dive card** — per-segment KPI strip (8 metrics vs store average), behavioural profile, and 5 specific CRM actions
+- **Segment Deep Dive** — per-segment KPI strip (8 metrics vs store average), behavioural profile, and 5 CRM actions
 
 ### Tab 3 — Transaction Segments
 - Transaction scatter (Quantity vs Unit Price, log scale)
 - Transaction cluster profiles
 - Missing CustomerID analysis by cluster
-- Revenue donut (known vs anonymous)
-- Timing by cluster
+- Revenue share donut
+- Timing by cluster (hour + day of week)
 
 ### Tab 4 — EDA Deep Dive
-- Box plots (Quantity, Unit Price, Revenue)
+- Box plots (Quantity, Unit Price, Revenue — 99th pct capped)
 - AOV trend over time
 - Basket size trend over time
-- Customer behaviour distributions
+- Customer behaviour distributions (BasketSize, AOV, Tenure)
 - Missing CustomerID by country
 
 ---
 
-## Deploying on Render (Free Tier)
+## Deploying on Streamlit Cloud (Free)
 
-1. Go to **render.com** → New → Web Service → connect this GitHub repo
-2. Set **Build Command:** `pip install -r requirements.txt`
-3. Set **Start Command:** `python dashboard.py`
-4. Set **Instance Type:** Free
-5. Click Deploy
+1. Push this repo to GitHub
+2. Go to **share.streamlit.io** → Sign in with GitHub → New app
+3. Select repo, branch `main`, file `app.py`
+4. Click **Deploy**
 
-The `data/` folder is pre-committed so Render loads ~8MB of parquet files at startup instead of reprocessing the raw CSV. This keeps startup RAM well under Render's 512MB free tier limit.
+The `data/` folder is pre-committed so Streamlit Cloud loads ~8MB of parquet files at startup instead of reprocessing the raw CSV.
 
 > If you update the raw data, run `python precompute.py` locally and push the new `data/` files to GitHub before redeploying.
 
@@ -189,7 +191,8 @@ python precompute.py
 | ABC at 80%/95% | Standard Pareto principle; consistent between notebook and dashboard |
 | DBSCAN eps=0.8 fixed | Auto percentile on k-distance graph was unreliable for this dataset |
 | Transaction clustering excludes Revenue | Revenue = Quantity × Price introduces multicollinearity |
-| Pre-computed parquet files | Avoids 700MB RAM spike from processing raw CSV on deployment |
+| Pre-computed parquet files | Avoids reprocessing 44MB CSV on every deployment startup |
+| Streamlit over Dash | Simpler deployment on Streamlit Cloud; no gunicorn/WSGI config needed |
 
 ---
 
@@ -201,7 +204,6 @@ numpy
 scikit-learn
 scipy
 plotly
-dash
-dash-bootstrap-components
+streamlit
 pyarrow
 ```
