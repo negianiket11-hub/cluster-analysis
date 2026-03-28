@@ -3,5 +3,5 @@ numpy
 scikit-learn
 scipy
 plotly
-streamlit
+streamlit>=1.35.0
 pyarrow
