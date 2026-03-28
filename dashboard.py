@@ -3,6 +3,7 @@ Online Retail Analytics Dashboard  (v3 — full analysis suite)
 Run:  python dashboard.py  →  open  http://127.0.0.1:8050
 """
 
+import os
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -1901,4 +1902,5 @@ def update_missing_country(_):
 # 11. RUN
 # ══════════════════════════════════════════════════════════
 if __name__ == "__main__":
-    app.run(debug=False, port=8050)
+    port = int(os.environ.get("PORT", 8050))
+    app.run(debug=False, host="0.0.0.0", port=port)
