@@ -1643,7 +1643,478 @@ Key takeaways:
 
 
 --------------------------------------------------------------------------------
-12. KEY TECHNICAL DECISIONS SUMMARY
+12. THEORY vs PROJECT — WHAT WAS USED, WHAT WASN'T, AND WHY
+--------------------------------------------------------------------------------
+
+This section maps every theoretical concept from Section 11 to its actual use
+(or non-use) in this project, with the specific reason in each case.
+
+────────────────────────────────────────────────────────────────────────────────
+12.1 DISTANCE METRICS
+────────────────────────────────────────────────────────────────────────────────
+
+  Concept              | Used? | Reason
+  ---------------------|-------|------------------------------------------------
+  Euclidean Distance   | YES   | K-Means' default and only distance metric.
+                       |       | After StandardScaler, all 6 RFM features have
+                       |       | equal variance, so Euclidean is appropriate.
+  ---------------------|-------|------------------------------------------------
+  Manhattan Distance   | NO    | Not needed. Manhattan is preferred when
+                       |       | outliers are present and uncapped, or in very
+                       |       | high-dimensional spaces. Our 6 features are
+                       |       | already capped (99th pct) and scaled, so
+                       |       | Euclidean works well and K-Means natively
+                       |       | supports only Euclidean.
+  ---------------------|-------|------------------------------------------------
+  Minkowski Distance   | NO    | A generalisation of Euclidean/Manhattan.
+                       |       | No reason to use a non-standard p value here.
+  ---------------------|-------|------------------------------------------------
+  Cosine Similarity    | NO    | Designed for text/high-dimensional sparse data
+                       |       | where magnitude doesn't matter. Our RFM
+                       |       | features are dense numeric values where
+                       |       | magnitude (e.g., how much a customer spent)
+                       |       | is precisely what we want to measure.
+  ---------------------|-------|------------------------------------------------
+  Mahalanobis Distance | NO    | Would remove the effect of feature correlations
+                       |       | by using the covariance matrix. We handled
+                       |       | correlations manually (excluded Revenue as a
+                       |       | feature in transaction clustering; chose 6
+                       |       | features that are not strongly collinear).
+                       |       | StandardScaler + feature selection made
+                       |       | Mahalanobis unnecessary.
+  ---------------------|-------|------------------------------------------------
+  Hamming Distance     | NO    | Only relevant for categorical features.
+                       |       | All 6 RFM features in this project are
+                       |       | continuous numeric — Hamming does not apply.
+
+
+────────────────────────────────────────────────────────────────────────────────
+12.2 CLUSTERING ALGORITHM FAMILIES
+────────────────────────────────────────────────────────────────────────────────
+
+  Algorithm Family     | Used? | Reason
+  ---------------------|-------|------------------------------------------------
+  K-Means              | YES   | Primary clustering algorithm. Chosen because:
+  (Partitioning)       |       | (1) RFM features produce roughly spherical
+                       |       | clusters — K-Means' main assumption holds.
+                       |       | (2) n=4,000 customers is well within K-Means'
+                       |       | efficient operating range.
+                       |       | (3) Interpretable centroids map naturally to
+                       |       | business segment profiles.
+  ---------------------|-------|------------------------------------------------
+  DBSCAN               | YES   | Used as a secondary / cross-validation method.
+  (Density-Based)      |       | Chosen to validate K-Means — if DBSCAN's
+                       |       | dense regions broadly align with K-Means
+                       |       | segments, confidence in the segmentation
+                       |       | increases. Also surfaced 215 outlier/noise
+                       |       | customers (eps=0.8, min_samples=5) that
+                       |       | K-Means would have forced into a cluster.
+  ---------------------|-------|------------------------------------------------
+  Hierarchical         | YES   | Used for visualisation only (dendrogram on a
+  (Agglomerative,      |       | 300-customer sample, Ward linkage). Its purpose
+  Ward linkage)        |       | was to visually confirm that 4 is a natural
+                       |       | cut-point in the data hierarchy — supporting
+                       |       | the k=4 business decision.
+  ---------------------|-------|------------------------------------------------
+  Gaussian Mixture     | NO    | GMM's key advantage is soft (probabilistic)
+  Models (GMM)         |       | cluster assignments. For a CRM segmentation
+                       |       | use case, a customer must be assigned to exactly
+                       |       | one segment to receive a specific campaign —
+                       |       | probabilistic assignments are not actionable
+                       |       | in practice. K-Means' hard assignments are
+                       |       | more suitable for this business context.
+  ---------------------|-------|------------------------------------------------
+  Spectral Clustering  | NO    | Designed for non-convex cluster shapes
+                       |       | (rings, crescents). RFM customer clusters are
+                       |       | expected to be roughly convex — high-spenders
+                       |       | cluster in one region of feature space,
+                       |       | low-spenders in another. Spectral clustering's
+                       |       | added complexity was not justified.
+  ---------------------|-------|------------------------------------------------
+  Fuzzy C-Means        | NO    | Same reason as GMM — soft cluster memberships
+                       |       | are not actionable for CRM segmentation.
+  ---------------------|-------|------------------------------------------------
+  Grid-Based           | NO    | Designed for spatial/geographic data at very
+                       |       | large scale. Not relevant to tabular RFM data.
+  ---------------------|-------|------------------------------------------------
+  K-Medoids (PAM)      | NO    | K-Medoids uses actual data points as cluster
+                       |       | representatives instead of means. More robust
+                       |       | to outliers than K-Means, but much slower
+                       |       | (O(n^2) per iteration). After 99th percentile
+                       |       | capping, outlier influence was already
+                       |       | controlled, removing K-Medoids' main advantage.
+  ---------------------|-------|------------------------------------------------
+  K-Modes              | NO    | Only for categorical data. All features here
+                       |       | are numeric after feature engineering.
+  ---------------------|-------|------------------------------------------------
+  HDBSCAN              | NO    | An improved DBSCAN that handles varying density
+                       |       | clusters automatically. The dataset had 6
+                       |       | density regions that DBSCAN found cleanly.
+                       |       | HDBSCAN would have been better if density
+                       |       | varied dramatically across segments, but the
+                       |       | results with DBSCAN were already interpretable.
+  ---------------------|-------|------------------------------------------------
+  Mini-Batch K-Means   | NO    | Used for very large datasets (n > ~100,000).
+                       |       | With ~4,000 customers, full K-Means converges
+                       |       | in milliseconds — Mini-Batch's speed trade-off
+                       |       | was unnecessary.
+
+
+────────────────────────────────────────────────────────────────────────────────
+12.3 K-MEANS SPECIFIC TECHNIQUES
+────────────────────────────────────────────────────────────────────────────────
+
+  Technique            | Used? | Reason
+  ---------------------|-------|------------------------------------------------
+  K-Means++            | YES   | Scikit-learn's default initialisation strategy
+  (init='k-means++')   |       | (init='k-means++'). Better starting centroids
+                       |       | reduce the chance of poor local minima without
+                       |       | any additional code required.
+  ---------------------|-------|------------------------------------------------
+  Multiple Restarts    | YES   | Scikit-learn default n_init=10 runs K-Means
+  (n_init=10)          |       | 10 times and keeps the best WCSS result.
+                       |       | Combined with K-Means++, this virtually
+                       |       | eliminates convergence to bad local minima.
+  ---------------------|-------|------------------------------------------------
+  Seed Stability       | YES   | 10 runs with different random seeds; ARI
+  (ARI across seeds)   |       | computed across pairs to confirm the k=4
+                       |       | solution is consistent. High ARI (~0.9+)
+                       |       | confirmed the clustering is not an artefact
+                       |       | of a lucky seed.
+
+
+────────────────────────────────────────────────────────────────────────────────
+12.4 K SELECTION METHODS
+────────────────────────────────────────────────────────────────────────────────
+
+  Method               | Used? | Reason
+  ---------------------|-------|------------------------------------------------
+  Elbow Method (WCSS)  | YES   | Plotted in main.ipynb for k=2 to k=10.
+  (Inertia)            |       | Used as one of three inputs to the k decision,
+                       |       | alongside silhouette and DB score.
+  ---------------------|-------|------------------------------------------------
+  Silhouette Score     | YES   | Primary metric evaluated for all k values.
+                       |       | Peaked at k=2 — but overridden to k=4 on
+                       |       | business grounds. The silhouette curve is
+                       |       | shown in the dashboard so users can see
+                       |       | the trade-off transparently.
+  ---------------------|-------|------------------------------------------------
+  Davies-Bouldin Index | YES   | Computed alongside silhouette for all k.
+                       |       | Displayed as a validation KPI in the Customer
+                       |       | Segments tab of the dashboard.
+  ---------------------|-------|------------------------------------------------
+  Calinski-Harabasz    | NO    | Not explicitly computed or displayed. Silhouette
+  Index                |       | and Davies-Bouldin were considered sufficient
+                       |       | for this project. CH tends to be biased toward
+                       |       | smaller k and would have reinforced the k=2
+                       |       | result even more strongly — not helpful given
+                       |       | the k=4 business requirement.
+  ---------------------|-------|------------------------------------------------
+  Gap Statistic        | NO    | The most statistically rigorous method but
+                       |       | computationally expensive (requires generating
+                       |       | multiple random datasets). Given that the final
+                       |       | k decision was already constrained by business
+                       |       | requirements (k=4 for CRM), the computational
+                       |       | cost of gap statistic was not justified.
+  ---------------------|-------|------------------------------------------------
+  Business/Domain      | YES   | The most important input. Silhouette said k=2;
+  Constraints          |       | the business needed 4 actionable tiers.
+                       |       | k=4 was enforced as a documented decision.
+
+
+────────────────────────────────────────────────────────────────────────────────
+12.5 FEATURE PREPROCESSING
+────────────────────────────────────────────────────────────────────────────────
+
+  Technique            | Used? | Reason
+  ---------------------|-------|------------------------------------------------
+  StandardScaler       | YES   | Applied to all 6 RFM features before K-Means.
+  (Z-score scaling)    |       | Monetary values in £ (thousands) would
+                       |       | otherwise completely dominate Euclidean
+                       |       | distance. After scaling, all features
+                       |       | contribute equally to cluster geometry.
+  ---------------------|-------|------------------------------------------------
+  MinMaxScaler         | NO    | MinMaxScaler is sensitive to outliers — the
+                       |       | min and max can be dominated by a single
+                       |       | extreme value. StandardScaler is more robust
+                       |       | after the 99th percentile capping step.
+  ---------------------|-------|------------------------------------------------
+  99th Percentile      | YES   | Applied to all 6 features before scaling.
+  Capping              |       | A handful of wholesale buyers spent 20–50×
+                       |       | the typical customer. Without capping, these
+                       |       | extreme values would pull centroids and distort
+                       |       | the cluster geometry for the other 99% of
+                       |       | customers.
+  ---------------------|-------|------------------------------------------------
+  Log Transformation   | YES   | Applied to Frequency, Monetary, AOV,
+                       |       | BasketSize, and Tenure (all except Recency).
+                       |       | These features had heavy right skew even after
+                       |       | capping. Log brings the distribution closer to
+                       |       | Gaussian, satisfying K-Means' implicit
+                       |       | normality assumption.
+                       |       | Recency was NOT log-transformed because it is
+                       |       | already right-skewed in the "useful" direction
+                       |       | for clustering — recent customers cluster
+                       |       | correctly without log.
+  ---------------------|-------|------------------------------------------------
+  Multicollinearity    | YES   | Revenue was excluded from transaction
+  Handling             |       | clustering features because Revenue = Quantity
+                       |       | × UnitPrice — including it would triple-count
+                       |       | those two signals. For customer clustering,
+                       |       | the 6 features were designed to be
+                       |       | non-redundant (Monetary ≠ AOV × Frequency
+                       |       | because Frequency is in units, not currency).
+  ---------------------|-------|------------------------------------------------
+  PCA Preprocessing    | NO    | PCA was used for visualisation only (see 12.6),
+  (before clustering)  |       | not as a preprocessing step before K-Means.
+                       |       | With only 6 features, dimensionality reduction
+                       |       | before clustering was not necessary — the curse
+                       |       | of dimensionality only becomes a concern at
+                       |       | ~20+ features.
+
+
+────────────────────────────────────────────────────────────────────────────────
+12.6 DIMENSIONALITY REDUCTION
+────────────────────────────────────────────────────────────────────────────────
+
+  Method               | Used? | Reason
+  ---------------------|-------|------------------------------------------------
+  PCA (2D projection)  | YES   | Used AFTER clustering for visualisation only.
+                       |       | The 6D cluster assignments were projected to
+                       |       | 2D to create a scatter plot where each point
+                       |       | is coloured by its K-Means segment. Visually
+                       |       | confirmed that cluster separation is real and
+                       |       | not an artefact.
+  ---------------------|-------|------------------------------------------------
+  t-SNE                | NO    | t-SNE distorts global distances while
+                       |       | preserving local neighbourhood structure.
+                       |       | It is excellent for visualising fine-grained
+                       |       | sub-clusters in very high-dimensional data
+                       |       | (like word embeddings or image features).
+                       |       | For 6 features and 4 well-separated clusters,
+                       |       | PCA is sufficient and more honest (it does not
+                       |       | artificially inflate cluster separation).
+  ---------------------|-------|------------------------------------------------
+  UMAP                 | NO    | Same reasoning as t-SNE. UMAP is excellent for
+                       |       | high-dimensional manifold data. With 6
+                       |       | numerical features and clean separation,
+                       |       | PCA's linear projection was adequate and more
+                       |       | computationally straightforward.
+
+
+────────────────────────────────────────────────────────────────────────────────
+12.7 EVALUATION METRICS
+────────────────────────────────────────────────────────────────────────────────
+
+  Metric               | Used? | Reason
+  ---------------------|-------|------------------------------------------------
+  Inertia / WCSS       | YES   | Elbow plot in notebook. Standard first-pass
+                       |       | diagnostic for K-Means.
+  ---------------------|-------|------------------------------------------------
+  Silhouette Score     | YES   | Primary internal quality metric. Displayed
+                       |       | in dashboard (Customer Segments tab KPI strip).
+  ---------------------|-------|------------------------------------------------
+  Davies-Bouldin Index | YES   | Secondary internal metric. Displayed in
+                       |       | dashboard alongside silhouette and ARI.
+  ---------------------|-------|------------------------------------------------
+  Adjusted Rand Index  | YES   | Used for cluster stability testing across 10
+  (ARI)                |       | random seeds. ARI is an external metric but
+                       |       | applied here without true labels — comparing
+                       |       | one run's assignments to another run's
+                       |       | assignments to measure consistency.
+  ---------------------|-------|------------------------------------------------
+  Calinski-Harabasz    | NO    | Not used. (See 12.4 — biased toward small k,
+  Index                |       | not helpful given k=4 business requirement.)
+  ---------------------|-------|------------------------------------------------
+  NMI / V-Measure /    | NO    | These require ground-truth labels to compare
+  Fowlkes-Mallows      |       | against. This is a fully unsupervised project
+                       |       | — there are no pre-existing "correct" segment
+                       |       | labels to validate against.
+  ---------------------|-------|------------------------------------------------
+  Dunn Index           | NO    | Computationally expensive and conceptually
+                       |       | similar to silhouette. Silhouette is more
+                       |       | widely understood and interpretable.
+  ---------------------|-------|------------------------------------------------
+  Bootstrap Stability  | NO    | Resampling-based stability analysis is the
+                       |       | most rigorous stability test but requires
+                       |       | significant computation. Seed-based ARI
+                       |       | stability testing was sufficient to confirm
+                       |       | the k=4 solution was reproducible.
+
+
+────────────────────────────────────────────────────────────────────────────────
+12.8 HIERARCHICAL CLUSTERING DETAILS
+────────────────────────────────────────────────────────────────────────────────
+
+  Aspect               | Used? | Reason
+  ---------------------|-------|------------------------------------------------
+  Agglomerative        | YES   | Dendrogram built on 300-customer sample
+  (Ward linkage)       |       | using Ward linkage. Ward minimises the WCSS
+                       |       | increase at each merge — most similar to
+                       |       | K-Means in its objective — making it the
+                       |       | natural choice to cross-validate K-Means.
+  ---------------------|-------|------------------------------------------------
+  Single Linkage       | NO    | Single linkage produces "chaining" — one long
+                       |       | snaking cluster that absorbs outliers. Not
+                       |       | useful for compact CRM segments.
+  ---------------------|-------|------------------------------------------------
+  Complete Linkage     | NO    | Complete linkage is sensitive to outliers (uses
+                       |       | the farthest pair). Ward linkage is more robust
+                       |       | and more commonly used in practice.
+  ---------------------|-------|------------------------------------------------
+  Average Linkage      | NO    | A reasonable alternative to Ward, but Ward
+                       |       | aligns better with K-Means' objective for
+                       |       | cross-validation purposes.
+  ---------------------|-------|------------------------------------------------
+  Divisive Clustering  | NO    | Top-down divisive clustering is rarely used
+                       |       | in practice (computationally complex, no
+                       |       | clear advantage over agglomerative here).
+  ---------------------|-------|------------------------------------------------
+  Full dataset         | NO    | Hierarchical clustering is O(n^2 log n) in
+  dendrogram           |       | time and space. With ~4,000 customers it would
+                       |       | produce a near-unreadable dendrogram. A
+                       |       | 300-customer random sample was used for
+                       |       | visualisation purposes.
+
+
+────────────────────────────────────────────────────────────────────────────────
+12.9 RFM FRAMEWORK
+────────────────────────────────────────────────────────────────────────────────
+
+  Aspect               | Used? | Reason
+  ---------------------|-------|------------------------------------------------
+  Classic 3-feature    | YES   | Recency, Frequency, Monetary are the core
+  RFM                  |       | features. The foundational signal for customer
+                       |       | segmentation in retail analytics.
+  ---------------------|-------|------------------------------------------------
+  Extended to 6        | YES   | AOV, BasketSize, and Tenure were added because
+  features             |       | R/F/M alone cannot distinguish a customer who
+                       |       | buys frequently but cheaply from one who buys
+                       |       | rarely but spends large amounts per visit.
+                       |       | The extra features made the 4 segments
+                       |       | significantly more distinct and actionable.
+  ---------------------|-------|------------------------------------------------
+  Traditional quintile | NO    | Old manual scoring (R=1–5, F=1–5, M=1–5)
+  scoring              |       | produces 125 rigid bins based on arbitrary
+                       |       | percentile cuts. Using K-Means instead lets
+                       |       | the data determine natural cluster boundaries
+                       |       | rather than imposing fixed 20th-percentile
+                       |       | cuts that may not reflect real behavioural
+                       |       | breaks in this specific dataset.
+
+
+────────────────────────────────────────────────────────────────────────────────
+12.10 ADVANCED TOPICS (NOT USED — AND WHY)
+────────────────────────────────────────────────────────────────────────────────
+
+  Topic                | Used? | Reason Not Used
+  ---------------------|-------|------------------------------------------------
+  Ensemble Clustering  | NO    | Adds robustness by combining many clustering
+                       |       | runs into a co-occurrence matrix. The seed
+                       |       | stability testing via ARI already showed the
+                       |       | k=4 K-Means solution is highly stable (~10
+                       |       | seeds, high ARI). Ensemble clustering would
+                       |       | add computation without changing the result.
+  ---------------------|-------|------------------------------------------------
+  Spectral Clustering  | NO    | Builds a graph and clusters eigenvectors of
+                       |       | its Laplacian. Handles non-convex shapes.
+                       |       | RFM clusters are expected to be convex —
+                       |       | Champions occupy one region of the 6D space,
+                       |       | Lapsed another. No non-convex structure
+                       |       | observed in PCA 2D plots.
+  ---------------------|-------|------------------------------------------------
+  Semi-Supervised      | NO    | Requires pairwise must-link/cannot-link
+  Clustering           |       | constraints — i.e., some domain knowledge
+                       |       | about which specific customers should be in
+                       |       | the same group. No such constraints were
+                       |       | available for this dataset.
+  ---------------------|-------|------------------------------------------------
+  Deep Clustering      | NO    | Uses neural autoencoders to learn a latent
+  (Autoencoder-based)  |       | representation before clustering. Overkill for
+                       |       | 6 tabular features. Deep clustering is
+                       |       | valuable when features are raw pixels, text
+                       |       | embeddings, or audio spectrograms — not
+                       |       | hand-engineered numeric features like RFM.
+  ---------------------|-------|------------------------------------------------
+  Streaming/Online     | NO    | The dataset is a static historical extract
+  Clustering           |       | (one year of transactions). No real-time
+                       |       | data stream exists. If this were to be
+                       |       | retrained monthly on incoming transactions,
+                       |       | Mini-Batch K-Means or CluStream would
+                       |       | become relevant.
+  ---------------------|-------|------------------------------------------------
+  Subspace Clustering  | NO    | Finds clusters in different feature subspaces.
+                       |       | Only needed when different customer groups are
+                       |       | distinguishable by different subsets of features.
+                       |       | All 6 RFM features are relevant to all segments
+                       |       | in this retail context.
+  ---------------------|-------|------------------------------------------------
+  Curse of             | LOW   | With only 6 features, the curse of
+  Dimensionality       | RISK  | dimensionality does not apply. The risk zone
+  (as a problem)       |       | begins around 20+ features. No action needed.
+
+
+────────────────────────────────────────────────────────────────────────────────
+12.11 QUICK SUMMARY TABLE
+────────────────────────────────────────────────────────────────────────────────
+
+  Category              | Concept                  | Used | Why / Why Not
+  ----------------------|--------------------------|------|--------------------
+  Distance              | Euclidean                | YES  | K-Means default; valid after scaling
+  Distance              | Manhattan                | NO   | Outliers already capped; not needed
+  Distance              | Cosine                   | NO   | For text/sparse data, not numeric RFM
+  Distance              | Mahalanobis              | NO   | Handled via feature design + scaling
+  Distance              | Hamming                  | NO   | No categorical features
+  Clustering            | K-Means                  | YES  | Primary algorithm; compact clusters
+  Clustering            | DBSCAN                   | YES  | Cross-validation; outlier detection
+  Clustering            | Hierarchical (Ward)      | YES  | Dendrogram; confirmed k=4
+  Clustering            | GMM                      | NO   | Soft assignments not actionable for CRM
+  Clustering            | Spectral                 | NO   | Clusters are convex; not needed
+  Clustering            | Fuzzy C-Means            | NO   | Soft assignments not actionable
+  Clustering            | K-Medoids                | NO   | Slower; outliers already capped
+  Clustering            | Mini-Batch K-Means       | NO   | n=4000; full K-Means is fast enough
+  Clustering            | HDBSCAN                  | NO   | DBSCAN results were clean; no need
+  Initialisation        | K-Means++                | YES  | Scikit-learn default; used implicitly
+  Initialisation        | Random init              | NO   | K-Means++ is strictly better
+  K selection           | Elbow (WCSS)             | YES  | First-pass diagnostic in notebook
+  K selection           | Silhouette               | YES  | Primary metric; peaked at k=2
+  K selection           | Davies-Bouldin           | YES  | Secondary metric; shown in dashboard
+  K selection           | Calinski-Harabasz        | NO   | Biased to small k; not helpful here
+  K selection           | Gap Statistic            | NO   | Expensive; k fixed by business need
+  K selection           | Domain Constraint (k=4)  | YES  | Most important input; overrode metrics
+  Preprocessing         | StandardScaler           | YES  | Mandatory before Euclidean K-Means
+  Preprocessing         | 99th pct capping         | YES  | Controlled wholesale outlier influence
+  Preprocessing         | Log transform            | YES  | Corrected right skew in 5 of 6 features
+  Preprocessing         | MinMaxScaler             | NO   | Sensitive to outliers; not used
+  Preprocessing         | PCA as preprocessing     | NO   | Only 6 features; not needed
+  Dim. Reduction        | PCA (visualisation)      | YES  | 2D projection to verify cluster shape
+  Dim. Reduction        | t-SNE                    | NO   | Distorts global distances; overkill
+  Dim. Reduction        | UMAP                     | NO   | Overkill for 6 clean numeric features
+  Evaluation            | Inertia / WCSS           | YES  | Elbow plot
+  Evaluation            | Silhouette Score         | YES  | Shown in dashboard
+  Evaluation            | Davies-Bouldin           | YES  | Shown in dashboard
+  Evaluation            | ARI (stability)          | YES  | 10-seed stability test
+  Evaluation            | NMI / V-Measure          | NO   | No ground truth labels exist
+  Evaluation            | Fowlkes-Mallows          | NO   | No ground truth labels exist
+  Evaluation            | Bootstrap stability      | NO   | Seed ARI was sufficient
+  Evaluation            | Calinski-Harabasz        | NO   | Not computed or displayed
+  Clustering type       | Hierarchical linkages:   |      |
+                        |   Ward                   | YES  | Aligns with K-Means objective
+                        |   Single / Complete /    | NO   | Chaining / outlier sensitivity
+                        |   Average                |      | / less aligned with K-Means
+  Framework             | RFM (extended, 6 feat)   | YES  | Core analytical framework
+  Framework             | RFM (classic 3 feat)     | PARTIAL | Used as base; extended to 6
+  Framework             | Quintile scoring         | NO   | K-Means finds natural breaks better
+  Framework             | ABC/Pareto               | YES  | Product classification (80/95%)
+  Advanced              | Ensemble clustering      | NO   | Stability already confirmed via ARI
+  Advanced              | Spectral clustering      | NO   | Convex clusters; not needed
+  Advanced              | Semi-supervised          | NO   | No pairwise constraints available
+  Advanced              | Deep clustering          | NO   | Tabular numeric data; overkill
+  Advanced              | Streaming clustering     | NO   | Static historical dataset
+
+
+--------------------------------------------------------------------------------
+13. KEY TECHNICAL DECISIONS SUMMARY
 --------------------------------------------------------------------------------
 
   Decision                          | Reason
@@ -1682,7 +2153,7 @@ Key takeaways:
 
 
 --------------------------------------------------------------------------------
-13. FILE STRUCTURE
+14. FILE STRUCTURE
 --------------------------------------------------------------------------------
 
   cluster-analysis/
@@ -1708,7 +2179,7 @@ Key takeaways:
 
 
 --------------------------------------------------------------------------------
-14. HOW TO RUN LOCALLY
+15. HOW TO RUN LOCALLY
 --------------------------------------------------------------------------------
 
   1. Clone the repository:
@@ -1731,7 +2202,7 @@ Key takeaways:
 
 
 --------------------------------------------------------------------------------
-15. DEPENDENCIES
+16. DEPENDENCIES
 --------------------------------------------------------------------------------
 
   Package          | Version  | Purpose
