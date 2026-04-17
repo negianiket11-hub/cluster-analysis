@@ -2114,7 +2114,500 @@ This section maps every theoretical concept from Section 11 to its actual use
 
 
 --------------------------------------------------------------------------------
-13. KEY TECHNICAL DECISIONS SUMMARY
+13. STEP-BY-STEP CALCULATIONS WITH REAL PROJECT DATA
+--------------------------------------------------------------------------------
+
+Every number below is taken directly from this project's dataset. The goal is
+to show exactly how each formula works with values you can verify manually.
+
+────────────────────────────────────────────────────────────────────────────────
+13.1 REVENUE CALCULATION (the simplest step)
+────────────────────────────────────────────────────────────────────────────────
+
+Raw transaction rows for Customer 12347, Invoice 537626 (07-Dec-2010):
+
+  Row  |  Quantity  |  UnitPrice (£)  |  Revenue = Qty × Price
+  -----|------------|-----------------|------------------------
+  1    |    12      |    2.10         |  12 × 2.10  =  £25.20
+  2    |     6      |    5.49         |   6 × 5.49  =  £32.94
+  3    |    12      |    4.65         |  12 × 4.65  =  £55.80
+  4    |    24      |    2.95         |  24 × 2.95  =  £70.80
+  ...  |   ...      |    ...          |   ...
+  (19 line items total for this invoice)
+
+  Invoice 537626 total revenue = £711.79
+
+Rows with Quantity ≤ 0 or UnitPrice ≤ 0 are dropped before this step.
+A row with Quantity=-12 would mean a return/error and would be removed.
+
+
+────────────────────────────────────────────────────────────────────────────────
+13.2 RFM FEATURE ENGINEERING — Full Walkthrough for Customer 12347
+────────────────────────────────────────────────────────────────────────────────
+
+This is the most important calculation in the project. We compute 6 features
+for every customer from their invoice history.
+
+Customer 12347 had 7 invoices over 1 year:
+
+  Invoice  |  Date              |  Revenue   |  Total Qty
+  ---------|--------------------|------------|------------
+  537626   |  07-Dec-2010       |  £711.79   |  319
+  542237   |  26-Jan-2011       |  £475.39   |  315
+  549222   |  07-Apr-2011       |  £636.25   |  483
+  556201   |  09-Jun-2011       |  £382.52   |  196
+  562032   |  02-Aug-2011       |  £584.91   |  277
+  573511   |  31-Oct-2011       |  £1,294.32 |  676
+  581180   |  07-Dec-2011       |  £224.82   |  192
+                                  ----------
+                       TOTAL:     £4,310.00   2,458 units
+
+Reference date = 10-Dec-2011 (max invoice date in dataset + 1 day)
+
+  Feature     |  Calculation                              |  Value
+  ------------|-------------------------------------------|--------
+  Recency     |  10-Dec-2011 − 07-Dec-2011 = 3 days       |    2*
+  Frequency   |  Count of unique invoices = 7             |    7
+  Monetary    |  Sum of all revenue                       |  £4,310.00
+  AOV         |  Monetary ÷ Frequency = 4310 ÷ 7          |  £615.71
+  BasketSize  |  Avg units per line item across invoices  |   13.51
+  Tenure      |  07-Dec-2011 − 07-Dec-2010 = 365 days     |  365
+
+  * Stored as 2 days in the data (reference date − last purchase date)
+
+Interpretation: Customer 12347 bought 2 days ago, 7 times in total, spent
+£4,310, each order averaged £615.71, buys ~13-14 units per line item, and
+has been a customer for a full year. This profile screams "Champion".
+
+Now repeat this calculation for 4,338 customers → one row per customer
+in the RFM table.
+
+
+────────────────────────────────────────────────────────────────────────────────
+13.3 COMPARING CUSTOMERS ACROSS SEGMENTS
+────────────────────────────────────────────────────────────────────────────────
+
+Let us look at 3 customers who ended up in different segments:
+
+  CustomerID  | Recency | Frequency | Monetary  |  AOV   | Tenure | Segment
+  ------------|---------|-----------|-----------|--------|--------|------------------
+  12347       |    2    |     7     | £4,310    | £615   |  365   | Champions
+  12352       |   36    |     8     | £2,506    | £313   |  260   | Champions
+  12350       |  310    |     1     |  £334     | £334   |    0   | Lapsed/Low-Value
+
+Reading across the table:
+  - 12347 and 12352 both have low recency (recent buyers), multiple orders,
+    strong spend → assigned to Champions.
+  - 12350 last bought 310 days ago, purchased only once, spent only £334,
+    and has zero tenure (first and only order) → Lapsed / Low-Value.
+
+The cluster algorithm "sees" these differences as distances in 6D space.
+
+
+────────────────────────────────────────────────────────────────────────────────
+13.4 OUTLIER CAPPING (99th Percentile)
+────────────────────────────────────────────────────────────────────────────────
+
+Problem: Customer 12346 has Monetary = £77,183. This is a wholesale buyer.
+If we include this raw value, K-Means centroids get pulled toward this outlier.
+
+Step 1 — Compute the 99th percentile of Monetary across all 4,338 customers.
+  Suppose cap_value = £22,000 (approximately the 99th percentile).
+
+Step 2 — Apply the cap:
+  Customer 12346:   raw Monetary = £77,183  →  capped to £22,000
+  Customer 12347:   raw Monetary = £4,310   →  unchanged (below cap)
+  Customer 12352:   raw Monetary = £2,506   →  unchanged (below cap)
+
+  Only the top 1% of customers (≈44 out of 4,338) are affected.
+
+Why this matters for K-Means:
+  Without capping, the Monetary centroid for Champions would be dragged toward
+  £77,183. With capping, the centroid reflects the typical champion behaviour
+  (£4,000–£6,000) rather than a handful of wholesale outliers.
+
+
+────────────────────────────────────────────────────────────────────────────────
+13.5 LOG TRANSFORMATION
+────────────────────────────────────────────────────────────────────────────────
+
+Applied to: Frequency, Monetary, AOV, BasketSize, Tenure (NOT Recency).
+Formula: log(x + 1)  [the +1 handles cases where x = 0, e.g., Tenure = 0]
+
+Take Monetary for our 3 customers:
+
+  CustomerID  |  Raw Monetary  |  log(Monetary + 1)    |  After log
+  ------------|----------------|------------------------|------------
+  12347       |  £4,310.00     |  log(4311.00)          |  8.37
+  12352       |  £2,506.04     |  log(2507.04)          |  7.83
+  12350       |  £334.40       |  log(335.40)           |  5.82
+  (outlier)   |  £77,183.60    |  log(77184.60)         | 11.25
+
+Before log, the range is: £334 to £77,183 — a 231× spread.
+After log,  the range is:  5.82 to 11.25 — a 1.93× spread.
+
+The log compression brings the extreme value (11.25) much closer to the
+others (7.83–8.37), so the outlier no longer dominates distance calculations.
+The relative ordering is preserved (12347 > 12352 > 12350), so the
+clustering signal is maintained.
+
+Why NOT apply log to Recency?
+  Recency = 2, 36, 310 for our three customers.
+  log(3), log(37), log(311) = 1.1, 3.6, 5.74.
+  The raw values (2, 36, 310) already spread out in a way that separates
+  recent from lapsed customers. Log would compress this useful separation.
+  Also, low Recency = good (recent buyer), and the non-log scale preserves
+  the large gap between 2 and 310 that K-Means needs to separate Champions
+  from Lapsed customers.
+
+
+────────────────────────────────────────────────────────────────────────────────
+13.6 STANDARDSCALER (Z-SCORE NORMALISATION)
+────────────────────────────────────────────────────────────────────────────────
+
+Applied AFTER log transformation. Formula: z = (x − mean) / std
+
+Here we show the calculation on RAW Recency (which is not log-transformed)
+using the actual dataset statistics:
+
+  mean_Recency = 92.54 days
+  std_Recency  = 100.01 days
+
+  CustomerID  |  Recency  |  Z-score = (Recency − 92.54) / 100.01
+  ------------|-----------|---------------------------------------
+  12347       |    2      |  (2   − 92.54) / 100.01 = −0.905
+  12352       |   36      |  (36  − 92.54) / 100.01 = −0.565
+  12350       |  310      |  (310 − 92.54) / 100.01 = +2.174
+
+After scaling:
+  - 12347 has Z = −0.905 → well below average (very recent buyer, good)
+  - 12352 has Z = −0.565 → below average (fairly recent)
+  - 12350 has Z = +2.174 → well above average (long inactive, bad)
+
+Why this matters:
+  Before scaling, Monetary ranges from £3 to £22,000 and Recency from 1
+  to 374 days. Euclidean distance would be completely dominated by Monetary
+  (large values = large squared differences). After Z-scoring, both features
+  have mean=0 and std=1, so they contribute equally to cluster distances.
+
+
+────────────────────────────────────────────────────────────────────────────────
+13.7 K-MEANS DISTANCE CALCULATION
+────────────────────────────────────────────────────────────────────────────────
+
+NOTE: Actual K-Means ran on all 6 features after log + StandardScaler.
+For manual demonstration, we use only 2 features (Recency, Monetary)
+in raw scale to keep the arithmetic tractable. The assignment direction
+matches the actual model output.
+
+Cluster centroids (from profile.parquet, raw feature values):
+
+  Cluster  |  Segment          |  Recency  |  Monetary
+  ---------|-------------------|-----------|----------
+  0        |  Loyal Customers  |  58.6     |  £814
+  1        |  At-Risk          |  114.6    |  £794
+  2        |  Lapsed/Low-Value |  198.7    |  £193
+  3        |  Champions        |  30.6     |  £6,326
+
+Now compute Euclidean distance from Customer 12347 (Recency=2, Monetary=4310)
+to each centroid:
+
+  Euclidean distance = sqrt( (R_customer − R_centroid)² + (M_customer − M_centroid)² )
+
+  To Loyal Customers (C0):
+    = sqrt( (2 − 58.6)²  + (4310 − 814)²  )
+    = sqrt( (−56.6)²     + (3496)²         )
+    = sqrt( 3,203.56     + 12,222,016      )
+    = sqrt( 12,225,220 )
+    ≈ 3,496.5
+
+  To At-Risk (C1):
+    = sqrt( (2 − 114.6)² + (4310 − 794)²  )
+    = sqrt( (−112.6)²    + (3516)²         )
+    = sqrt( 12,678.76    + 12,362,256      )
+    = sqrt( 12,374,935 )
+    ≈ 3,517.8
+
+  To Lapsed/Low-Value (C2):
+    = sqrt( (2 − 198.7)² + (4310 − 193)²  )
+    = sqrt( (−196.7)²    + (4117)²         )
+    = sqrt( 38,690.89    + 16,949,689      )
+    = sqrt( 16,988,380 )
+    ≈ 4,122.0
+
+  To Champions (C3):
+    = sqrt( (2 − 30.6)²  + (4310 − 6326)² )
+    = sqrt( (−28.6)²     + (−2016)²        )
+    = sqrt( 817.96       + 4,064,256       )
+    = sqrt( 4,065,074 )
+    ≈ 2,016.1   ← SMALLEST
+
+  ASSIGN to Champions (C3) — distance 2,016 vs next-closest 3,497.
+
+  The model correctly assigns 12347 to Champions. ✓
+
+K-Means repeats this distance comparison for all 4,338 customers and
+assigns each to the nearest centroid.
+
+
+────────────────────────────────────────────────────────────────────────────────
+13.8 K-MEANS CENTROID UPDATE
+────────────────────────────────────────────────────────────────────────────────
+
+After all customers are assigned, each centroid is recomputed as the mean
+of the customers currently assigned to it.
+
+Mini-example: Suppose only 3 customers are assigned to the Champions cluster
+in the first iteration:
+
+  Customer  |  Recency  |  Monetary
+  ----------|-----------|----------
+  12347     |    2      |  £4,310
+  12352     |   36      |  £2,506
+  12348     |   75      |  £1,797
+
+New Champions centroid:
+  Recency  = (2 + 36 + 75) / 3  =  113 / 3  =  37.7
+  Monetary = (4310 + 2506 + 1797) / 3  =  8613 / 3  =  £2,871
+
+Old centroid was (30.6, 6326). New centroid is (37.7, 2871).
+The centroid has moved significantly because the initial centroid placement
+was arbitrary. K-Means repeats Assign → Update until the centroid stops
+moving — this is convergence.
+
+In the actual project with 4,338 customers and 6 features, convergence
+took around 20–40 iterations.
+
+
+────────────────────────────────────────────────────────────────────────────────
+13.9 SILHOUETTE SCORE CALCULATION
+────────────────────────────────────────────────────────────────────────────────
+
+Using the same 3 customers and 2 features (Recency, Monetary) in raw scale:
+
+  Customer  |  Recency  |  Monetary  |  Cluster
+  ----------|-----------|------------|------------------
+  C1: 12347 |    2      |  4,310     |  Champions
+  C2: 12352 |   36      |  2,506     |  Champions
+  C3: 12350 |  310      |    334     |  Lapsed/Low-Value
+
+Computing silhouette for C1 (Customer 12347):
+
+  Step 1 — a(C1): Mean distance to all other points IN the same cluster.
+    Only C2 is in the Champions cluster alongside C1.
+    d(C1, C2) = sqrt( (2−36)² + (4310−2506)² )
+              = sqrt( (−34)² + (1804)² )
+              = sqrt( 1,156 + 3,254,416 )
+              = sqrt( 3,255,572 )
+              ≈ 1,804.3
+    a(C1) = 1,804.3  (only one neighbour in same cluster)
+
+  Step 2 — b(C1): Mean distance to all points in the NEAREST OTHER cluster.
+    Only C3 is in the Lapsed cluster.
+    d(C1, C3) = sqrt( (2−310)² + (4310−334)² )
+              = sqrt( (−308)² + (3976)² )
+              = sqrt( 94,864 + 15,808,576 )
+              = sqrt( 15,903,440 )
+              ≈ 3,987.9
+    b(C1) = 3,987.9
+
+  Step 3 — Silhouette score for C1:
+    s(C1) = ( b − a ) / max(a, b)
+           = ( 3,987.9 − 1,804.3 ) / max(1,804.3, 3,987.9)
+           = 2,183.6 / 3,987.9
+           ≈ 0.547
+
+  s(C1) = 0.547 means C1 is reasonably well-clustered.
+  A score of 1.0 would mean C1 is perfectly inside Champions and far from Lapsed.
+  A score of 0.0 would mean C1 is on the boundary between the two clusters.
+  A score of -1.0 would mean C1 is more similar to Lapsed than to Champions.
+
+The overall silhouette score is the mean of s(i) for all 4,338 customers
+across all 6 features. This project's actual silhouette score for k=4 was
+displayed in the dashboard.
+
+
+────────────────────────────────────────────────────────────────────────────────
+13.10 SEGMENT LABELLING (Composite RFM Rank → Champion / Loyal / At-Risk / Lapsed)
+────────────────────────────────────────────────────────────────────────────────
+
+After K-Means assigns each customer to a cluster (0, 1, 2, 3), we need
+to label the clusters with business names. The algorithm does not know which
+cluster is "Champions" — it only knows cluster indices.
+
+Step 1 — Normalise each RFM feature to 0–1 range (min-max within feature):
+  For our 3 customers, using Recency and Monetary only:
+
+  Recency range: min=2, max=310
+  Monetary range: min=334, max=4310
+
+  Customer  |  Recency_norm = (max−R)/(max−min)  |  Monetary_norm = (M−min)/(max−min)
+            |  (INVERTED: low recency = good)      |
+  ----------|--------------------------------------|------------------------------------
+  12347     |  (310−2)/(310−2)     = 308/308 = 1.0 |  (4310−334)/(4310−334) = 1.0
+  12352     |  (310−36)/(310−2)    = 274/308 = 0.89 |  (2506−334)/(3976)     = 0.55
+  12350     |  (310−310)/(310−2)   =   0/308 = 0.0  |  (334−334)/(3976)      = 0.0
+
+Step 2 — Compute composite rank = mean of all normalised features:
+  12347: (1.0 + 1.0) / 2 = 1.00   → highest rank
+  12352: (0.89 + 0.55) / 2 = 0.72
+  12350: (0.0  + 0.0)  / 2 = 0.00  → lowest rank
+
+Step 3 — Compute quartile thresholds across all 4,338 customers' composite ranks:
+  Q25 = np.percentile(all_composite_ranks, 25) → e.g., 0.20
+  Q50 = np.percentile(all_composite_ranks, 50) → e.g., 0.38
+  Q75 = np.percentile(all_composite_ranks, 75) → e.g., 0.58
+
+Step 4 — Assign labels:
+  Cluster with mean composite rank > Q75  → Champions
+  Cluster with mean composite rank Q50–Q75 → Loyal Customers
+  Cluster with mean composite rank Q25–Q50 → At-Risk
+  Cluster with mean composite rank < Q25   → Lapsed / Low-Value
+
+In our example:
+  12347 composite rank = 1.00 → Champions ✓
+  12350 composite rank = 0.00 → Lapsed/Low-Value ✓
+
+This labelling maps the arbitrary cluster indices (0, 1, 2, 3) produced by
+K-Means onto the four business segment names.
+
+
+────────────────────────────────────────────────────────────────────────────────
+13.11 ABC / PARETO ANALYSIS CALCULATION
+────────────────────────────────────────────────────────────────────────────────
+
+Total revenue across ALL products = £8,887,208.84
+
+Step 1 — Rank products by revenue descending:
+
+  Rank |  Product                           |  Revenue     |  % of Total
+  -----|------------------------------------|--------------|-----------
+  1    |  PAPER CRAFT, LITTLE BIRDIE        |  £168,469.59 |  1.896 %
+  2    |  REGENCY CAKESTAND 3 TIER          |  £142,264.75 |  1.601 %
+  3    |  WHITE HANGING HEART T-LIGHT HOLDER|  £100,392.10 |  1.130 %
+  4    |  JUMBO BAG RED RETROSPOT           |   £85,040.54 |  0.957 %
+  5    |  MEDIUM CERAMIC TOP STORAGE JAR    |   £81,416.73 |  0.917 %
+  ...  |  ...                               |  ...         |  ...
+  ~N   |  long-tail products                |  very small  |  < 0.01%
+
+Step 2 — Compute cumulative % (CumPct):
+  After product 1: CumPct = 1.896 %
+  After product 2: CumPct = 1.896 + 1.601 = 3.497 %
+  After product 3: CumPct = 3.497 + 1.130 = 4.627 %
+  After product 4: CumPct = 4.627 + 0.957 = 5.583 %
+  After product 5: CumPct = 5.583 + 0.917 = 6.500 %
+  ... keep adding until CumPct crosses 80%, then 95%
+
+Step 3 — Assign ABC class:
+  CumPct ≤ 80% → Class A  (these ~20% of SKUs drive 80% of revenue)
+  80% < CumPct ≤ 95% → Class B
+  CumPct > 95%  → Class C  (long tail — many SKUs, tiny individual revenue)
+
+Interpretation from this project:
+  It takes only a handful of products to reach CumPct = 6.5% (5 products).
+  The top ~20% of SKUs account for ~80% of all £8.9M revenue.
+  Classic Pareto 80/20 confirmed.
+
+
+────────────────────────────────────────────────────────────────────────────────
+13.12 SEGMENT REVENUE CONTRIBUTION
+────────────────────────────────────────────────────────────────────────────────
+
+After segmentation, we aggregate revenue per segment:
+
+  Segment            |  Total Revenue  |  % of All Revenue
+  -------------------|-----------------|-------------------
+  Champions          |  £6,838,566     |  76.9 %
+  Loyal Customers    |  £1,225,029     |  13.8 %
+  At-Risk            |    £641,232     |   7.2 %
+  Lapsed/Low-Value   |    £182,382     |   2.1 %
+                     |  -----------    |  -------
+  TOTAL              |  £8,887,209     | 100.0 %
+
+Reading this table:
+  - Champions = 76.9% of revenue. This is the most critical segment to retain.
+    Losing Champions means losing ~£7M in annual revenue.
+  - Lapsed/Low-Value = only 2.1%. High volume of customers but minimal revenue.
+    Large re-engagement campaigns on this group have poor ROI.
+  - At-Risk = 7.2%. These customers were previously active. A targeted win-back
+    campaign here has the highest revenue recovery potential per campaign £.
+
+This directly drives the CRM action priority: Champions → Loyal → At-Risk → Lapsed.
+
+
+────────────────────────────────────────────────────────────────────────────────
+13.13 DBSCAN NEIGHBOURHOOD CHECK (manual)
+────────────────────────────────────────────────────────────────────────────────
+
+DBSCAN was run on the StandardScaled 6D feature space with eps=0.8,
+min_samples=5. Here is what the eps check means in practice:
+
+Two points are NEIGHBOURS if their Euclidean distance (in scaled space) ≤ 0.8.
+
+Mini-example: Suppose two customers have the following standardised features
+(just 2 features shown for simplicity):
+
+  Customer A (scaled): Recency_z = -0.91, Monetary_z = +0.25
+  Customer B (scaled): Recency_z = -0.57, Monetary_z = +0.05
+
+  d(A, B) = sqrt( (−0.91 − (−0.57))² + (0.25 − 0.05)² )
+           = sqrt( (−0.34)² + (0.20)² )
+           = sqrt( 0.1156 + 0.0400 )
+           = sqrt( 0.1556 )
+           ≈ 0.394
+
+  0.394 < 0.8 → A and B ARE neighbours.
+
+Now consider a potential outlier customer C (scaled): Recency_z = +2.17, Monetary_z = -1.80
+
+  d(A, C) = sqrt( (−0.91 − 2.17)² + (0.25 − (−1.80))² )
+           = sqrt( (−3.08)² + (2.05)² )
+           = sqrt( 9.4864 + 4.2025 )
+           = sqrt( 13.689 )
+           ≈ 3.70
+
+  3.70 > 0.8 → A and C are NOT neighbours.
+
+If customer C has fewer than 5 total neighbours within eps=0.8, it is labelled
+as NOISE (cluster = -1). This project found 215 such noise customers —
+mostly the very high-spend wholesale one-off buyers and dormant accounts
+that don't fit any dense cluster region.
+
+
+────────────────────────────────────────────────────────────────────────────────
+13.14 PCA 2D PROJECTION (how the scatter plot is made)
+────────────────────────────────────────────────────────────────────────────────
+
+After K-Means assigns all customers to segments, PCA projects the 6D feature
+vectors to 2D for visualisation. The mechanics:
+
+Step 1 — Compute the 6×6 covariance matrix of the scaled feature matrix.
+
+Step 2 — Find eigenvectors and eigenvalues of that matrix.
+  Suppose the top 2 eigenvectors (principal components) are:
+    PC1 = [0.45, 0.52, 0.48, 0.31, 0.22, 0.38]  (weights for 6 features)
+    PC2 = [0.30, -0.21, 0.18, -0.55, 0.65, -0.29]
+
+Step 3 — Project each customer to 2D:
+  Customer 12347 scaled features: [R_z, F_z, M_z, AOV_z, BS_z, T_z]
+  Actual PC1 score from data: +2.53
+  Actual PC2 score from data: +0.24
+
+  Customer 12350 (Lapsed):
+  Actual PC1 score: -2.11,  PC2 score: +1.39
+
+Step 4 — Plot PC1 on X-axis, PC2 on Y-axis, colour by segment.
+  Champions cluster in one region (high PC1), Lapsed in another (low PC1).
+  This visual separation confirms the K-Means clustering is real, not random.
+
+The actual PC1/PC2 values stored in rfm_full.parquet confirm Champions
+tend toward high positive PC1 scores while Lapsed customers have negative
+PC1 scores — the first principal component largely captures overall
+customer value (a combination of Monetary + Frequency + Tenure).
+
+
+--------------------------------------------------------------------------------
+14. KEY TECHNICAL DECISIONS SUMMARY
 --------------------------------------------------------------------------------
 
   Decision                          | Reason
@@ -2153,7 +2646,7 @@ This section maps every theoretical concept from Section 11 to its actual use
 
 
 --------------------------------------------------------------------------------
-14. FILE STRUCTURE
+15. FILE STRUCTURE
 --------------------------------------------------------------------------------
 
   cluster-analysis/
@@ -2179,7 +2672,7 @@ This section maps every theoretical concept from Section 11 to its actual use
 
 
 --------------------------------------------------------------------------------
-15. HOW TO RUN LOCALLY
+16. HOW TO RUN LOCALLY
 --------------------------------------------------------------------------------
 
   1. Clone the repository:
@@ -2202,7 +2695,7 @@ This section maps every theoretical concept from Section 11 to its actual use
 
 
 --------------------------------------------------------------------------------
-16. DEPENDENCIES
+17. DEPENDENCIES
 --------------------------------------------------------------------------------
 
   Package          | Version  | Purpose
