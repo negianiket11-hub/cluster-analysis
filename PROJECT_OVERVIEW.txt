@@ -2606,6 +2606,339 @@ PC1 scores — the first principal component largely captures overall
 customer value (a combination of Monetary + Frequency + Tenure).
 
 
+────────────────────────────────────────────────────────────────────────────────
+13.15 HOW EACH SEGMENT'S CENTROID IS CALCULATED — FULL WALKTHROUGH
+────────────────────────────────────────────────────────────────────────────────
+
+A centroid is simply the MEAN of every customer assigned to that cluster
+across all 6 features. Here is how each of the 4 final centroids was reached.
+
+The actual segment sizes after convergence:
+  Champions        → 1,081 customers
+  Loyal Customers  → 1,505 customers
+  At-Risk          →   808 customers
+  Lapsed/Low-Value →   944 customers
+  TOTAL            → 4,338 customers
+
+──────────────────────────────────────────
+CENTROID 1: CHAMPIONS (1,081 customers)
+──────────────────────────────────────────
+
+A few real Champions customers from rfm_full.parquet:
+
+  CustomerID  | Recency | Frequency | Monetary  |  AOV   | BasketSize | Tenure
+  ------------|---------|-----------|-----------|--------|------------|-------
+  12347       |    2    |     7     |  4,310    |  615.7 |    13.5    |  365
+  12348       |   75    |     4     |  1,797    |  449.3 |    75.5    |  282
+  12352       |   36    |     8     |  2,506    |  313.3 |     6.3    |  260
+  12356       |   23    |     3     |  2,811    |  937.1 |    27.0    |  302
+  12359       |   58    |     4     |  6,310    | 1577.5 |     6.6    |  274
+  ... (1,076 more rows)
+
+Champions centroid = column-wise mean across all 1,081 rows:
+
+  Recency    = (2 + 75 + 36 + 23 + 58 + ...) / 1081  =  30.6 days
+  Frequency  = (7 + 4  + 8  + 3  + 4  + ...) / 1081  =  10.5 invoices
+  Monetary   = (4310+1797+2506+2811+6310+...) / 1081  =  £6,326
+  AOV        = (615.7+449.3+313.3+937.1+1577.5+..) / 1081 =  £658.8
+  BasketSize = (13.5+75.5+6.3+27.0+6.6+...) / 1081   =  58.2 units
+  Tenure     = (365+282+260+302+274+...) / 1081        =  267.7 days
+
+  Final Champions centroid: [30.6, 10.5, 6326, 658.8, 58.2, 267.7]
+
+Reading this centroid in plain English:
+  "The average Champion bought 30 days ago, has placed 10–11 orders, spent
+  £6,326 in total, spends £658 per order, buys 58 units per line item,
+  and has been a customer for ~9 months."
+
+──────────────────────────────────────────
+CENTROID 2: LOYAL CUSTOMERS (1,505 customers)
+──────────────────────────────────────────
+
+A few real Loyal customers:
+
+  CustomerID  | Recency | Frequency | Monetary  |  AOV   | BasketSize | Tenure
+  ------------|---------|-----------|-----------|--------|------------|-------
+  12358       |    2    |     2     |  1,168    |  584.0 |    13.1    |  149
+  12363       |  110    |     2     |    552    |  276.0 |    17.7    |  132
+  12364       |    8    |     4     |  1,313    |  328.3 |    17.7    |  104
+  12372       |   72    |     3     |  1,298    |  432.7 |    15.3    |  224
+  12375       |   11    |     2     |    457    |  228.7 |    10.5    |   87
+  ... (1,500 more rows)
+
+  Final Loyal centroid: [58.6, 3.4, 814, 260.0, 9.9, 176.8]
+
+Plain English: "The average Loyal customer bought 59 days ago, placed 3–4
+orders, spent £814 total, £260 per order, buys ~10 units per line, has been
+a customer for ~6 months."
+
+Notice vs Champions:
+  Recency 58.6 vs 30.6   → Loyal shop less recently
+  Frequency 3.4 vs 10.5  → Loyal order far less often
+  Monetary £814 vs £6,326 → Loyal spend is ~8× lower
+  Tenure 176.8 vs 267.7   → Loyal have shorter customer histories
+
+These centroid gaps are what K-Means "sees" when separating the two clusters.
+
+──────────────────────────────────────────
+CENTROID 3: AT-RISK (808 customers)
+──────────────────────────────────────────
+
+A few real At-Risk customers:
+
+  CustomerID  | Recency | Frequency | Monetary  |   AOV  | BasketSize | Tenure
+  ------------|---------|-----------|-----------|--------|------------|-------
+  12346       |  326    |     1     |  77,183   | 77,183 |   74,215   |   0
+  12349       |   19    |     1     |  1,757    |  1,757 |     8.6    |   0
+  12354       |  232    |     1     |  1,079    |  1,079 |     9.1    |   0
+  12355       |  214    |     1     |    459    |    459 |    18.5    |   0
+  12357       |   33    |     1     |  6,207    |  6,207 |    20.7    |   0
+  ... (803 more rows)
+
+  Final At-Risk centroid: [114.6, 1.2, 793.6, 679.5, 134.5, 4.9]
+
+Plain English: "The average At-Risk customer bought 115 days ago (~4 months),
+has placed only 1–2 orders ever, spent £794 total, but each order was worth
+£679 — they are high-value-per-visit but not repeat buyers."
+
+Key observation — Tenure = 4.9 days:
+  Nearly every At-Risk customer has Tenure ≈ 0. This means their FIRST and
+  LAST purchase were on the same day (or very close). They bought once,
+  maybe spent a lot, and never returned. This is very different from Loyal
+  customers whose Tenure = 177 days (repeat over 6 months).
+
+Also note: Customer 12346 (Monetary=£77,183, BasketSize=74,215) is a massive
+outlier being pulled into At-Risk because they bought once and have not
+returned. The 99th-percentile cap reduces their influence, but they are still
+an outlier within this cluster — which is why the At-Risk centroid's
+BasketSize=134.5 is unusually high.
+
+──────────────────────────────────────────
+CENTROID 4: LAPSED / LOW-VALUE (944 customers)
+──────────────────────────────────────────
+
+A few real Lapsed customers:
+
+  CustomerID  | Recency | Frequency | Monetary  |  AOV   | BasketSize | Tenure
+  ------------|---------|-----------|-----------|--------|------------|-------
+  12350       |  310    |     1     |    334    |  334.4 |    11.6    |   0
+  12353       |  204    |     1     |     89    |   89.0 |     5.0    |   0
+  12361       |  287    |     1     |    190    |  189.9 |     9.1    |   0
+  12365       |  291    |     2     |    641    |  320.7 |     7.9    |   0
+  12373       |  311    |     1     |    365    |  364.6 |    14.1    |   0
+  ... (939 more rows)
+
+  Final Lapsed centroid: [198.7, 1.2, 193.2, 168.7, 9.7, 6.7]
+
+Plain English: "The average Lapsed customer bought 199 days ago (~6.5 months),
+placed only 1 order, spent only £193 total, £169 per order, bought ~10 units
+per line item, and has Tenure = 6.7 days (nearly zero — one-time buyers)."
+
+The defining feature of Lapsed vs At-Risk:
+  - Both have Frequency ≈ 1.2 and Tenure ≈ 0 (mostly one-time buyers)
+  - At-Risk: Monetary = £794, AOV = £680  → spent more per visit
+  - Lapsed: Monetary = £193, AOV = £169   → spent little per visit
+  K-Means separates these two groups because Monetary + AOV differ so much.
+
+──────────────────────────────────────────
+CENTROID COMPARISON — ALL 4 SIDE BY SIDE
+──────────────────────────────────────────
+
+  Segment          | Recency | Frequency | Monetary  |  AOV   | BasketSize | Tenure | n
+  -----------------|---------|-----------|-----------|--------|------------|--------|------
+  Champions        |  30.6   |   10.5    |  6,326    |  658.8 |    58.2    |  267.7 | 1081
+  Loyal Customers  |  58.6   |    3.4    |    814    |  260.0 |     9.9    |  176.8 | 1505
+  At-Risk          | 114.6   |    1.2    |    794    |  679.5 |   134.5    |    4.9 |  808
+  Lapsed/Low-Value | 198.7   |    1.2    |    193    |  168.7 |     9.7    |    6.7 |  944
+
+The centroid is the "average person" in each segment. Any new customer
+can be measured against these 4 points — whichever centroid they are
+closest to in 6D space determines their segment assignment.
+
+
+────────────────────────────────────────────────────────────────────────────────
+13.16 WHY k=4? AND WHY IT IS AN ASSUMPTION, NOT A PROVEN FACT
+────────────────────────────────────────────────────────────────────────────────
+
+This is arguably the most important conceptual point in the entire project.
+
+──────────────────────────────────────────
+WHAT THE DATA ACTUALLY SAYS
+──────────────────────────────────────────
+
+Silhouette scores computed for k = 2 through k = 8:
+
+  k  |  Silhouette Score  |  Verdict
+  ---|--------------------|------------------------------------------
+  2  |  0.3432            |  ← Mathematically BEST. Data "prefers" 2 clusters.
+  3  |  0.2476            |
+  4  |  0.2461            |  ← We CHOSE this. Not the mathematical optimum.
+  5  |  0.2573            |  (Slightly better than k=4 by the metric!)
+  6  |  0.2359            |
+  7  |  0.2370            |
+  8  |  0.2419            |
+
+Inertia (WCSS) by k — does it show a clear elbow?
+
+  k=2:  16,497   (decrease of 16,497 from k=1 baseline)
+  k=3:  13,746   (decrease of 2,751  from k=2)
+  k=4:  11,867   (decrease of 1,879  from k=3)
+  k=5:  10,511   (decrease of 1,356  from k=4)
+  k=6:   9,559   (decrease of 952    from k=5)
+  k=7:   8,707   (decrease of 852    from k=6)
+  k=8:   8,092   (decrease of 615    from k=7)
+
+There is no clean elbow in this data. The inertia decreases smoothly. The
+biggest single drop is k=2 → k=3 (−2,751), then k=3 → k=4 (−1,879). If
+anything, the elbow suggests k=3, not k=4.
+
+So to be blunt: if you let the math decide, k=2 wins on silhouette, k=3
+wins on the elbow. k=4 was imposed by the analyst (us). This is the
+assumption.
+
+──────────────────────────────────────────
+WHAT k=2 WOULD PRODUCE
+──────────────────────────────────────────
+
+With k=2, the algorithm splits the data into two groups:
+  Group 1: High-value customers (recent, frequent, high spend)
+  Group 2: Low-value customers (inactive, rare, low spend)
+
+This is mathematically the cleanest split because the biggest variance in
+the 6D feature space runs along a single "value" axis. The two natural
+"poles" of customer data are high-engagement vs low-engagement.
+
+Why is k=2 commercially useless?
+  A marketing team cannot operate with two segments. Every business decision
+  you make with k=2 is binary:
+    "Send campaign A to high-value, campaign B to low-value."
+  This ignores critical distinctions:
+    - A frequent buyer who hasn't visited in 4 months needs a different
+      message than a NEW frequent buyer.
+    - A high-spend one-time buyer is very different from a repeat buyer —
+      the former needs re-engagement; the latter needs loyalty nurturing.
+  k=2 merges these distinct behavioural states into the same group.
+
+──────────────────────────────────────────
+WHAT k=3 WOULD PRODUCE
+──────────────────────────────────────────
+
+With k=3, you'd likely get:
+  Group 1: Active high-value
+  Group 2: Moderate / mixed
+  Group 3: Inactive low-value
+
+Still too coarse. The "moderate/mixed" group contains both customers who are
+growing (Loyal) and customers who are declining (At-Risk). These require
+opposite interventions — grow vs retain — but k=3 cannot distinguish them.
+
+──────────────────────────────────────────
+WHY k=4 IS THE MINIMUM VIABLE CRM MODEL
+──────────────────────────────────────────
+
+The 4-tier model (Champions / Loyal / At-Risk / Lapsed) is a well-established
+framework in retail CRM. It maps to four distinct business actions:
+
+  Segment          |  Business Action            |  Budget Priority
+  -----------------|-----------------------------|-----------------
+  Champions        |  Reward, retain, upsell     |  High — protect £7M revenue
+  Loyal Customers  |  Grow frequency, cross-sell  |  Medium — convert to Champions
+  At-Risk          |  Win-back campaigns          |  High — stop the bleeding
+  Lapsed/Low-Value |  Re-engage if cost-effective |  Low — poor ROI
+
+With k=2 or k=3, "At-Risk" does not exist as a category. You cannot run
+a win-back campaign for customers you haven't identified.
+
+With k=4, each segment has a distinct, non-overlapping action:
+  - Champions and Loyal share "high engagement" but need different messages.
+  - At-Risk and Lapsed share "low recency" but need different messages
+    (At-Risk spent more, are worth more effort to win back).
+
+──────────────────────────────────────────
+THE ASSUMPTION AND ITS RISKS
+──────────────────────────────────────────
+
+By forcing k=4, we made several assumptions that may not always be true:
+
+  ASSUMPTION 1: There are exactly 4 meaningful customer types.
+  Reality: There could be 3, 5, or 6. With k=4, K-Means will always return 4
+  groups even if the "true" structure is different. We are imposing a
+  4-compartment mental model onto continuous data.
+
+  ASSUMPTION 2: The business labels (Champions/Loyal/At-Risk/Lapsed) are correct.
+  Reality: The label assignment is done by computing a composite RFM rank
+  and using quartiles. But two different labelling methods could produce
+  different segment names for the same cluster index. The underlying clusters
+  are objective; the names are subjective.
+
+  ASSUMPTION 3: 4 segments are stable over time.
+  Reality: Customer behaviour evolves. The thresholds that define
+  "At-Risk" today may not work next year. The model should be retrained
+  periodically (e.g., quarterly) to ensure centroids reflect current behaviour.
+
+  ASSUMPTION 4: K-Means is the right algorithm for this data shape.
+  Reality: K-Means assumes spherical clusters. The PCA 2D plot and DBSCAN
+  results were used to partially validate this, but the true 6D shape of the
+  clusters cannot be fully visualised. If clusters are non-convex, K-Means
+  is giving us an approximation, not the true structure.
+
+──────────────────────────────────────────
+HOW WE VALIDATED THE ASSUMPTION
+──────────────────────────────────────────
+
+Even though k=4 is assumed, it was validated in three ways:
+
+  1. STABILITY TEST (ARI = 0.9877):
+     K-Means was run 10 times with different random seeds. The Adjusted Rand
+     Index across all pairs of runs was 0.9877 — essentially 1.0. This means
+     the same 4 groups are recovered no matter what seed is used. A flimsy
+     assumption would produce ARI ≈ 0.6 (lots of cluster assignment shuffling).
+     ARI = 0.9877 is strong evidence the k=4 structure is real and stable.
+
+  2. CROSS-ALGORITHM VALIDATION (DBSCAN + Hierarchical):
+     - DBSCAN (no k assumption, eps=0.8) found 6 density-based clusters.
+       These 6 clusters map roughly onto sub-groups within the 4 K-Means
+       segments — e.g., Champions splits into "moderate Champions" and
+       "super-Champions." The broader 4-group structure is confirmed.
+     - The Ward linkage dendrogram on 300 customers shows the clearest
+       horizontal cut at 4 groups. The tree branches at 4 are the longest
+       (most separated), corroborating k=4 as a reasonable choice.
+
+  3. INTERPRETABILITY TEST (Business logic check):
+     Each centroid was manually inspected (Section 13.15). Each segment
+     has a coherent, distinct, human-readable profile:
+       Champions  → recent, frequent, high spend, long tenure
+       Loyal      → recent-ish, moderate frequency, moderate spend
+       At-Risk    → high recency, one-time, high-value per visit, zero tenure
+       Lapsed     → high recency, one-time, low-value, zero tenure
+     If two centroids were nearly identical (hard to distinguish in plain
+     English), that would signal we have too many clusters. They are
+     distinctly different, validating k=4.
+
+──────────────────────────────────────────
+THE HONEST SUMMARY
+──────────────────────────────────────────
+
+k=4 is a HYPOTHESIS, not a proof.
+
+The silhouette score says k=2. The elbow mildly suggests k=3. We chose k=4
+for business utility. The stability (ARI=0.9877) and cross-algorithm agreement
+(DBSCAN, hierarchical) give us confidence that the k=4 structure is real and
+not random — but a different analyst making different choices could produce
+equally valid segmentations with k=3 or k=5.
+
+This is the fundamental nature of unsupervised learning: unlike supervised
+learning where you can measure accuracy against ground truth, clustering has
+no objective "correct" answer. The best clustering is the one that is:
+  (a) stable across seeds and perturbations  ✓  (ARI = 0.9877)
+  (b) consistent across algorithms           ✓  (DBSCAN, hierarchical agree)
+  (c) interpretable by domain experts        ✓  (4 clear business personas)
+  (d) actionable for the business problem    ✓  (4 distinct CRM strategies)
+
+In this project, k=4 satisfies all four criteria. That is why it was chosen.
+But it remains an informed assumption — always label it as such.
+
+
 --------------------------------------------------------------------------------
 14. KEY TECHNICAL DECISIONS SUMMARY
 --------------------------------------------------------------------------------
