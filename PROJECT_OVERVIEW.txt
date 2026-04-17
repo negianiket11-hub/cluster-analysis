@@ -1,0 +1,1750 @@
+================================================================================
+RETAIL CUSTOMER CLUSTER ANALYSIS — FULL PROJECT OVERVIEW
+================================================================================
+Live App : https://cluster-analysis-a2stz5wmubfw5xmu95nwh6.streamlit.app
+GitHub   : https://github.com/negianiket11-hub/cluster-analysis
+Author   : Aniket Negi
+Dataset  : UCI Online Retail II (December 2010 – December 2011)
+Stack    : Python · Pandas · Scikit-learn · Plotly · Streamlit
+================================================================================
+
+
+--------------------------------------------------------------------------------
+1. PROJECT OBJECTIVE
+--------------------------------------------------------------------------------
+
+The goal of this project was to take a real-world transactional e-commerce
+dataset and turn it into a full end-to-end analytics product — both a
+reproducible Jupyter analysis and a live, interactive web dashboard that a
+business stakeholder could actually use.
+
+The core analytical question was: "Can we cluster retail customers into
+meaningful, actionable groups using their purchasing behaviour, and then build a
+tool that lets marketing teams explore those groups interactively?"
+
+The project was designed to cover the full data science lifecycle:
+  - Raw data ingestion and cleaning
+  - Exploratory data analysis (EDA)
+  - Feature engineering (RFM model)
+  - Unsupervised machine learning (K-Means, DBSCAN, Hierarchical clustering)
+  - Dimensionality reduction (PCA)
+  - Interactive dashboard with live filters and segment deep-dives
+  - Cloud deployment on Streamlit Community Cloud
+  - GitHub-integrated CI/CD (push-to-deploy)
+
+
+--------------------------------------------------------------------------------
+2. DATASET
+--------------------------------------------------------------------------------
+
+Source      : UCI Machine Learning Repository — "Online Retail II"
+URL         : https://archive.ics.uci.edu/ml/datasets/online+retail
+Period      : December 2010 – December 2011 (one full calendar year)
+Business    : UK-based online retailer, primarily gift and homeware items
+Raw size    : 541,909 transaction line items, ~44MB CSV
+
+Key columns in the raw data:
+  - InvoiceNo   : Transaction identifier; prefix "C" = cancellation
+  - StockCode   : Product SKU
+  - Description : Product name
+  - Quantity    : Units ordered (negative for cancellations)
+  - InvoiceDate : Timestamp
+  - UnitPrice   : Price per unit in GBP
+  - CustomerID  : Unique customer identifier (missing for ~25% of rows)
+  - Country     : Customer country
+
+After cleaning, the dataset produced approximately 400,000 valid transaction
+line items, ~4,000 unique customers with full purchase histories, and a separate
+transaction-level table that preserved anonymous (CustomerID-missing) rows for
+behavioural analysis.
+
+
+--------------------------------------------------------------------------------
+3. DATA CLEANING PIPELINE
+--------------------------------------------------------------------------------
+
+Step 1 — Deduplication
+  Exact duplicate rows (same InvoiceNo, StockCode, Quantity, CustomerID) were
+  removed. These arise from data entry errors in the source system.
+
+Step 2 — Cancellation removal
+  Invoices starting with "C" represent cancellations. These were identified and
+  removed from the customer analysis dataset. The cancellation rate was tracked
+  as a separate monthly KPI (visible in the dashboard's Overview tab).
+
+Step 3 — Invalid quantity and price removal
+  Rows where Quantity <= 0 or UnitPrice <= 0 were dropped. Wholesale bulk
+  orders with extreme quantities were retained at this stage but later capped.
+
+Step 4 — Null removal
+  Rows with missing Description were dropped. Rows with missing CustomerID were
+  retained in the transaction-level table (df_txn) for transaction clustering
+  but dropped from the customer-level table (df_cust) used for RFM.
+
+Step 5 — Revenue column creation
+  Revenue = Quantity × UnitPrice was computed as a derived column.
+
+Step 6 — Two dataset splits
+  - df_transactions : Pre-CustomerID-drop table (with anonymous rows). Used
+    for transaction clustering, EDA on all orders, cancellation analysis.
+  - df_clean        : Post-CustomerID-drop table. Used for all customer-level
+    analysis, RFM computation, and customer clustering.
+
+These two datasets serve different analytical purposes and are kept separate
+throughout the project to avoid mixing customer-identified and anonymous
+behaviour incorrectly.
+
+
+--------------------------------------------------------------------------------
+4. EXPLORATORY DATA ANALYSIS (EDA)
+--------------------------------------------------------------------------------
+
+The EDA section in main.ipynb covered the following areas:
+
+4.1 Revenue Distribution
+  - Highly right-skewed. A small number of wholesale customers account for
+    the majority of revenue. The 99th percentile cap was essential to avoid
+    these outliers dominating cluster geometry.
+
+4.2 Top Products
+  - Top 15 products by revenue identified. Many are gift or homeware items.
+    "REGENCY CAKESTAND 3 TIER" and similar decorative items dominate.
+
+4.3 ABC / Pareto Analysis
+  - Products ranked by revenue contribution:
+      A-class: top 80% of revenue (typically ~20% of SKUs)
+      B-class: next 15% of revenue
+      C-class: bottom 5% of revenue
+  - Thresholds: 80% and 95% cumulative revenue. Consistent between notebook
+    and dashboard.
+  - Classic Pareto principle confirmed: ~20% of products drive ~80% of revenue.
+
+4.4 Country Analysis
+  - United Kingdom dominates with ~85% of revenue. Top 10 countries include
+    Germany, France, EIRE (Ireland), Netherlands, Spain, Belgium.
+  - Country filter in the dashboard sidebar lets users drill into any market.
+
+4.5 Time-Based Analysis
+  - Monthly revenue trend: Revenue peaked in November 2011 ahead of Christmas
+    shopping season.
+  - Revenue by day of week and hour of day: Thursday is highest revenue day;
+    peak hours are 12:00–14:00. Visualised as a heatmap in the dashboard.
+  - AOV (Average Order Value) and basket size tracked over time. Both show
+    seasonal patterns aligning with the November peak.
+
+4.6 Cancellation Rate
+  - Tracked monthly. Some months show elevated cancellation rates that may
+    indicate stock availability or logistics issues.
+  - Cancellation rate is shown in the Overview tab as a standalone KPI chart.
+
+4.7 Missing CustomerID Analysis
+  - ~25% of transaction rows have no CustomerID. These are likely guest
+    checkouts or phone orders.
+  - Analysed by country: some markets have systematically higher anonymous
+    transaction rates.
+  - Visualised in the EDA Deep Dive tab with a bar chart by country.
+
+4.8 Box Plots
+  - Quantity, UnitPrice, and Revenue box plots with 99th-percentile capping.
+    Outlier counts are displayed alongside so the viewer understands how much
+    data was capped.
+
+
+--------------------------------------------------------------------------------
+5. RFM FEATURE ENGINEERING
+--------------------------------------------------------------------------------
+
+RFM (Recency, Frequency, Monetary) is a standard customer analytics framework.
+This project extended the classic 3-feature model to 6 features:
+
+  Feature     | Definition                                  | Direction
+  ------------|---------------------------------------------|------------------
+  Recency     | Days since last purchase (reference = max   | Lower = better
+              | invoice date + 1 day)                       |
+  Frequency   | Count of unique invoices                    | Higher = better
+  Monetary    | Total spend in GBP                          | Higher = better
+  AOV         | Average Order Value = Monetary / Frequency  | Higher = better
+  BasketSize  | Average units per transaction line item     | Higher = better
+  Tenure      | Days between first and last purchase        | Higher = better
+
+Pre-processing pipeline applied before clustering:
+  1. 99th percentile capping — caps extreme outliers per feature
+  2. Log transformation — applied to all features except Recency to handle
+     remaining right skew. (Recency is already roughly right-skewed in the
+     correct direction — we want low values to cluster together, so log would
+     work against us here.)
+  3. StandardScaler — zero mean, unit variance. This ensures no single feature
+     dominates K-Means distance calculations purely due to scale differences.
+
+Why 6 features instead of classic 3?
+  - AOV distinguishes between customers who buy frequently but cheaply vs.
+    those who buy rarely but spend a lot per visit. K-Means cannot infer this
+    from Monetary and Frequency alone.
+  - BasketSize captures wholesale vs. retail buying behaviour.
+  - Tenure differentiates new high-spenders from long-established loyal
+    customers — important for churn risk modelling.
+
+
+--------------------------------------------------------------------------------
+6. CUSTOMER CLUSTERING (K-MEANS)
+--------------------------------------------------------------------------------
+
+6.1 Finding the Right K
+  Three cluster quality metrics were evaluated for k = 2 through k = 10:
+    - Silhouette Score (higher = better separation)
+    - Inertia / WCSS (elbow method)
+    - Davies-Bouldin Score (lower = better)
+
+  Silhouette automatically selected k = 2. However, two clusters produce
+  essentially "high-value" vs "low-value" — far too coarse for CRM work.
+  k = 4 was forced as it gives the standard 4-tier retail CRM model:
+  Champions, Loyal Customers, At-Risk, Lapsed. This is a deliberate analytical
+  decision, not a limitation.
+
+6.2 Segment Labelling
+  After K-Means, each cluster was assigned a business label based on its
+  composite RFM rank:
+    - Composite rank = mean of normalised Recency (inverted), Frequency,
+      Monetary, AOV, BasketSize, Tenure
+    - Quartile thresholds (np.percentile at [25, 50, 75]) on composite rank
+      determine which label each cluster receives
+
+  Labels:
+    Champions       — Lowest recency, highest frequency and spend
+    Loyal Customers — Regular buyers, strong spend, room to grow
+    At-Risk         — Previously active, recency increasing, needs retention
+    Lapsed/Low-Value— Long inactive, low historical engagement
+
+6.3 Cluster Stability
+  Adjusted Rand Index (ARI) was computed across 10 different random seeds to
+  verify that the k=4 solution is stable and not seed-dependent. ARI scores
+  close to 1.0 indicate the cluster assignment is consistent regardless of
+  random initialisation.
+
+6.4 DBSCAN (Density-Based Spatial Clustering)
+  DBSCAN was run alongside K-Means as an alternative approach:
+    - Parameters: eps = 0.8, min_samples = 5
+    - Result: 6 density-based clusters + 215 noise points (labelled -1)
+    - eps was fixed manually after validating the k-distance graph. The
+      auto-percentile approach was unreliable for this particular dataset's
+      density profile.
+  DBSCAN serves as a cross-validation tool — its clusters broadly overlap with
+  K-Means segments, providing confidence in the segmentation.
+
+6.5 Hierarchical Clustering
+  Ward linkage dendrogram computed on a 300-customer sample for visualisation.
+  The dendrogram confirms 4 as a natural cut-point, supporting the k=4 decision.
+
+6.6 PCA (Principal Component Analysis)
+  6D feature space projected to 2D for visual inspection. The PCA plot confirms
+  cluster separation is real and not an artefact — clusters form visually
+  distinct regions in the projected space.
+
+6.7 Radar Chart
+  All 4 segments visualised on a single 6-axis radar chart.
+  - All axes normalised to [0.1, 0.9] range (not [0, 1])
+  - Why 0.1 minimum instead of 0? With true [0, 1] scaling, the weakest
+    segment collapses to an invisible point at the origin. The 0.1 floor
+    ensures every segment is visible and comparable.
+  - Recency axis is inverted (lower = better = outer ring) so all 6 axes
+    follow the same "bigger is better" visual convention.
+
+
+--------------------------------------------------------------------------------
+7. TRANSACTION CLUSTERING
+--------------------------------------------------------------------------------
+
+Separate from customer clustering, the full transaction table (including
+anonymous rows) was clustered to understand purchasing behaviour patterns:
+
+Features used:
+  - log(Quantity)
+  - log(UnitPrice)
+  - Normalised Hour (0–1 scale)
+  - Normalised DayCode (0–1 scale, Mon=0 to Sun=1)
+
+Revenue was deliberately excluded from transaction clustering features because
+Revenue = Quantity × UnitPrice would introduce multicollinearity — the cluster
+algorithm would effectively see the same signal three times.
+
+K-Means on a 30,000-row stratified sample was used to select best k by
+silhouette score. The resulting clusters reflect different transaction types:
+high-quantity bulk orders, high-price small orders, low-value routine purchases,
+weekend vs weekday patterns, etc.
+
+Each cluster's profile (avg quantity, price, revenue, hour, day distribution,
+and % missing CustomerID) is shown in the Transaction Segments tab.
+
+
+--------------------------------------------------------------------------------
+8. INTERACTIVE DASHBOARD (app.py)
+--------------------------------------------------------------------------------
+
+The dashboard is built with Streamlit + Plotly. All heavy computation is done
+offline and pre-saved as parquet files in the data/ directory. The app loads
+these ~8MB of files at startup via @st.cache_data, making it fast even on
+Streamlit's free-tier infrastructure.
+
+8.1 Architecture
+  - data/ directory: 10 parquet files + meta.json (~8MB total)
+    These are the outputs of the full cleaning + modelling pipeline:
+      df_raw_dedup.parquet      — Cleaned, deduplicated raw transactions
+      df_txn.parquet            — Transaction-level with all columns
+      df_cust.parquet           — Customer-level table with RFM + cluster labels
+      rfm_full.parquet          — Full RFM features + cluster assignments
+      profile.parquet           — Cluster profiles (mean feature values)
+      seg_revenue.parquet       — Revenue and customer count by segment
+      abc_all.parquet           — Product-level ABC classification
+      abc_summary.parquet       — ABC summary statistics
+      missing_by_country.parquet— Missing CustomerID counts by country
+      meta.json                 — Scalar metrics (k, silhouette, DB score, ARI)
+
+  - app.py: ~960-line Streamlit application
+    Loads parquets, builds all charts with Plotly, renders 4 tabs
+
+8.2 Sidebar Filters
+  Two global filters applied to Overview and EDA tabs:
+    - Country dropdown (ALL + individual countries)
+    - Date range picker (defaults to full dataset range)
+  The Customer Segments tab also has an additional per-segment filter.
+
+8.3 Tabs
+  Tab 1 — Overview
+    KPI strip: Total Revenue, Unique Orders, Known Customers, Average Order Value
+    Charts: Monthly Revenue, Revenue by Country, Top 15 Products, Revenue
+    Heatmap (day × hour), ABC/Pareto, Monthly Cancellation Rate.
+    Each chart is followed by a Key Insights + Actionable Recommendations panel.
+
+  Tab 2 — Customer Segments
+    Validation KPIs: k, Silhouette, Davies-Bouldin, ARI
+    Cluster profiles table and feature bar charts
+    Radar chart (all 4 segments)
+    Scatter plots: Recency vs Monetary, Frequency vs Monetary
+    PCA 2D projection, DBSCAN view
+    RFM feature distribution histograms
+    Revenue contribution donut, Segment size vs revenue bubble chart
+    Segment Deep Dive: per-segment KPI strip (8 metrics vs store average)
+    with behavioural profile and 5 concrete CRM action recommendations
+
+  Tab 3 — Transaction Segments
+    Transaction scatter (Quantity vs Unit Price, log scale)
+    Transaction cluster profiles, missing CustomerID by cluster
+    Revenue share donut, timing charts by cluster
+
+  Tab 4 — EDA Deep Dive
+    Box plots (99th pct capped), AOV trend, basket size trend
+    Customer behaviour distributions, missing CustomerID by country
+
+8.4 Insight Panels
+  Every chart in the dashboard is paired with:
+    - Blue "Key Insights" panel — 3–5 bullet points interpreting the chart
+    - Green "Actionable Recommendations" panel — 3–5 business actions
+  These are rendered as raw HTML via st.markdown(unsafe_allow_html=True)
+  using the insight_panel() helper function.
+
+8.5 Design System
+  Light theme enforced via .streamlit/config.toml:
+    base                  = "light"
+    primaryColor          = "#2563EB"  (blue)
+    backgroundColor       = "#FFFFFF"  (white)
+    secondaryBackground   = "#F1F5F9"  (slate-100)
+    textColor             = "#0F172A"  (slate-900)
+
+  Design tokens defined in app.py (PALETTE, BG, CARD_BG, BORDER, etc.)
+  ensure all charts use the same colour system.
+
+
+--------------------------------------------------------------------------------
+9. DEPLOYMENT
+--------------------------------------------------------------------------------
+
+9.1 Streamlit Community Cloud
+  The app is deployed on Streamlit's free tier:
+    URL: https://cluster-analysis-a2stz5wmubfw5xmu95nwh6.streamlit.app
+
+  Deployment is fully automated via GitHub:
+    - Any push to the main branch triggers an automatic redeploy
+    - No manual steps required after the initial setup
+    - Streamlit Cloud reads requirements.txt and installs dependencies
+
+  Configuration files:
+    requirements.txt         — Python package versions
+    .streamlit/config.toml   — Theme and appearance settings
+
+9.2 Why Streamlit Cloud over Render/Heroku
+  The project initially used Dash (Python) deployed on Render. This caused
+  serious problems (see Section 10, Challenges). Streamlit Cloud was chosen as
+  the replacement because:
+    - Free tier with no sleep/spin-up delays
+    - Native Python — no WSGI/gunicorn configuration needed
+    - One-click GitHub integration, auto-deploy on push
+    - Built-in @st.cache_data caching for expensive operations
+    - Simpler code structure vs Dash callback model
+
+9.3 Pre-computed Data Strategy
+  The raw CSV (~44MB) is not committed to GitHub (too large for free git
+  hosting). Instead, all heavy computation was done once locally and the
+  results saved as 10 lightweight parquet files (~8MB total). The dashboard
+  loads these at startup and never re-processes raw data at runtime.
+
+  This means:
+    - App starts in ~2 seconds on free-tier Streamlit Cloud
+    - No dependency on the raw CSV file at runtime
+    - Data is consistent and deterministic (no random seed differences between
+      the notebook analysis and the dashboard)
+
+
+--------------------------------------------------------------------------------
+10. CHALLENGES FACED
+--------------------------------------------------------------------------------
+
+10.1 502 Bad Gateway on Render (Memory Crash)
+  Problem:
+    The original Dash app was deployed on Render's free tier (512MB RAM). Every
+    time a dropdown filter was changed, the callback function was copying the
+    entire 500,000-row df_txn DataFrame into memory as a side effect. With
+    multiple concurrent callbacks and Plotly chart objects also in memory, the
+    process would regularly exceed the RAM limit and die with a 502 error.
+
+  Root Cause:
+    The _apply_filter() function originally accepted df_txn as an argument and
+    returned it alongside the customer DataFrame — but the caller always
+    discarded the returned df_txn. This meant the full 500K-row DataFrame was
+    being copied on every single filter interaction, with zero benefit.
+
+  Fix:
+    Removed df_txn from _apply_filter() entirely. The transaction filter was
+    moved to an inline operation only in the specific chart that needs it. This
+    cut per-callback memory usage by ~60%.
+
+  Outcome:
+    Fixed the 502 errors on Render. However, this also pointed to a deeper
+    architectural mismatch — Dash on free-tier cloud hosting was fundamentally
+    unsuitable for this app's data volume.
+
+10.2 Dashboard Became Non-Interactive After Memory Fix
+  Problem:
+    After the memory optimisation, the dashboard appeared to load but charts
+    would not update when filters were changed. The app became effectively
+    static.
+
+  Root Cause:
+    During the memory optimisation, Description was converted to a categorical
+    dtype (category) as a memory-saving measure. When Pandas groupby operations
+    were run on filtered subsets of a categorical column, they would still
+    include all original categories (including ones not present in the filtered
+    data), producing silent groupby errors that caused chart updates to fail.
+
+  Fix:
+    Removed Description from the categorical conversion. Only genuinely
+    beneficial columns (Country, Segment) remained categorical.
+
+  Outcome:
+    Interactivity restored. Highlighted the importance of testing filter
+    interactions thoroughly, not just initial load.
+
+10.3 Full Migration from Dash to Streamlit
+  Problem:
+    The combination of Render memory limits and Dash's callback complexity made
+    the deployment fundamentally fragile. The decision was made to completely
+    rewrite the dashboard in Streamlit.
+
+  Scope:
+    The original Dash dashboard was ~1,760 lines. The Streamlit rewrite is
+    ~960 lines — a 45% reduction in code while maintaining all features. This
+    was achieved because:
+      - Streamlit's reactive execution model eliminates all explicit @app.callback
+        decorators and Input/Output/State dependency declarations
+      - No need for dcc.Store or intermediate data serialisation
+      - st.cache_data replaces manual caching logic
+
+  Challenges during migration:
+    a) All 15 INS (insight panel) dictionaries had to be reconstructed. These
+       were recovered from git history using: git show <commit>:dashboard.py
+    b) Plotly secondary_y charts (like the ABC dual-axis chart) required
+       different syntax in Streamlit vs Dash (go.Scatter on secondary_y=True
+       rather than a dcc.Graph figure factory approach).
+    c) The radar chart theta labels had to use ASCII-only characters because
+       Plotly's polar chart rendering on Streamlit Cloud mangled certain Unicode
+       symbols, producing garbled axis labels.
+
+10.4 streamlit Command Not Found
+  Problem:
+    Running "streamlit run app.py" in the VS Code terminal gave a
+    CommandNotFoundException error on Windows.
+
+  Root Cause:
+    Streamlit was installed but its executable was not added to the system PATH
+    during the pip install.
+
+  Fix:
+    Use "python -m streamlit run app.py" instead. This invokes Streamlit as a
+    Python module rather than relying on the PATH-registered executable.
+
+  Outcome:
+    App runs correctly at http://localhost:8501
+
+10.5 Streamlit Cloud Deployment Error (Altair Incompatibility)
+  Problem:
+    After deploying to Streamlit Cloud, the app crashed immediately with:
+      ModuleNotFoundError: No module named 'altair.vegalite.v4'
+
+  Root Cause:
+    Streamlit Cloud's environment resolved streamlit==1.19.0 from requirements.txt
+    (because no version was pinned). This old version of Streamlit internally
+    imports altair.vegalite.v4, which was completely removed in altair>=6.0.0.
+    The two packages were incompatible at the versions Streamlit Cloud resolved.
+
+  Fix:
+    Pinned streamlit>=1.35.0 in requirements.txt. Modern Streamlit versions do
+    not use the removed altair.vegalite.v4 import path.
+
+  Outcome:
+    Deployment succeeded. This is a common gotcha with Streamlit Cloud — always
+    pin the streamlit version explicitly.
+
+10.6 Git Push Rejected After Streamlit Cloud Auto-Commit
+  Problem:
+    When deploying for the first time, Streamlit Cloud automatically created a
+    .devcontainer/ folder and committed it to the GitHub repo. When local changes
+    were then pushed, Git rejected the push because the remote had commits that
+    were not in the local history.
+
+  Root Cause:
+    Remote ahead of local by one commit (the auto-generated .devcontainer commit
+    from Streamlit Cloud).
+
+  Fix:
+    git pull --rebase origin main
+    git push origin main
+
+  This rebased local commits on top of the Streamlit Cloud commit, then pushed
+  the linear history cleanly.
+
+  Outcome:
+    Push succeeded. The .devcontainer folder was subsequently deleted as it was
+    not needed (Streamlit Cloud uses requirements.txt, not devcontainer configs).
+
+10.7 delta_str() lower_better Bug
+  Problem:
+    In the Segment Deep Dive section, each segment's KPI strip shows
+    "X% vs avg" with a coloured up/down arrow. For metrics like Recency,
+    lower is better — a Champion having 20% lower recency than average is
+    good, not bad. But Champions were showing a red downward arrow for
+    Recency, making it look like they were performing poorly on a metric
+    they actually excelled at.
+
+  Root Cause:
+    The delta_str() function had a lower_better=False parameter declared in
+    its signature but the parameter was never used inside the function body.
+    The pct calculation always treated higher as better regardless of the flag.
+
+  Fix:
+    Added: display_pct = -pct if lower_better else pct
+    This negates the percentage for lower-is-better metrics, so a Champion
+    with lower-than-average Recency correctly shows a green upward arrow.
+
+  Code (fixed):
+    def delta_str(val, avg_val, lower_better=False):
+        diff = val - avg_val
+        pct  = diff / avg_val * 100 if avg_val else 0
+        display_pct = -pct if lower_better else pct
+        arrow = "▲" if display_pct > 0 else "▼"
+        sign  = "+" if display_pct > 0 else ""
+        return f"{arrow} {sign}{display_pct:.0f}% vs avg"
+
+10.8 Redundant TotalRevenue Recalculation
+  Problem:
+    The bubble chart in the Customer Segments tab (Segment Size vs Revenue)
+    was recomputing TotalRevenue from rfm_full at runtime on every render.
+    This was both redundant and potentially inconsistent — seg_revenue.parquet
+    already contained the authoritative precomputed TotalRevenue values.
+
+  Root Cause:
+    Copy-paste from an earlier version of the code that predated the pre-computed
+    parquet architecture. The runtime calculation was never removed.
+
+  Fix:
+    Removed the inline TotalRevenue computation and replaced it with a merge
+    from the precomputed seg_revenue DataFrame:
+      seg_counts = seg_counts.merge(
+          seg_revenue[["Segment", "TotalRevenue", "RevPct"]], on="Segment", how="left"
+      )
+
+  Outcome:
+    Chart now uses consistent values that exactly match the Revenue Contribution
+    donut chart on the same tab.
+
+10.9 k=2 vs k=4 Cluster Decision
+  Problem:
+    Silhouette score objectively and consistently peaks at k=2 for this dataset.
+    A naive implementation would auto-select k=2.
+
+  Resolution:
+    k=2 produces "high-value customers" and "low-value customers" — a binary
+    split that is analytically valid but commercially useless. CRM teams need
+    at least 4 tiers to run differentiated campaigns (retention for Champions,
+    growth for Loyal, win-back for At-Risk, re-engagement for Lapsed).
+    k=4 was forced as a deliberate, documented business decision. The dashboard
+    shows the silhouette curve so analysts can see the trade-off and understand
+    why k=4 was chosen over the mathematical optimum.
+
+10.10 Raw CSV File Management
+  Problem:
+    The raw CSV (~44MB) was initially included in the repository. This caused
+    slow git operations and approached GitHub's file size limits. It was later
+    deleted to clean up the repo.
+
+  Consequence:
+    The Jupyter notebook (main.ipynb) reads the raw CSV in its first cell.
+    After deletion, the notebook could no longer be re-run from scratch without
+    the user manually re-downloading the dataset from UCI.
+
+  Resolution:
+    The parquet files in data/ contain all data the dashboard needs. For the
+    notebook, the user must re-download "Online Retail.xlsx" from the UCI
+    repository if they want to re-run the full analysis pipeline. The notebook
+    can still be read and all outputs are already stored in the .ipynb file
+    (no re-run needed just to view results).
+
+
+--------------------------------------------------------------------------------
+11. CLUSTER ANALYSIS — THEORY FROM BASICS TO ADVANCED
+--------------------------------------------------------------------------------
+
+This section explains cluster analysis as a discipline — independent of this
+project — covering everything from foundational concepts to advanced techniques.
+
+────────────────────────────────────────────────────────────────────────────────
+11.1 WHAT IS CLUSTER ANALYSIS?
+────────────────────────────────────────────────────────────────────────────────
+
+Cluster analysis (or clustering) is a class of unsupervised machine learning
+techniques that group a set of objects such that objects within the same group
+(called a cluster) are more similar to each other than to objects in other
+groups.
+
+The key word is UNSUPERVISED. In supervised learning, you train a model on
+labelled data (e.g., "this customer churned = 1, this one did not = 0") and
+the algorithm learns to predict the label. In clustering, there are NO labels.
+The algorithm discovers structure in the data entirely on its own.
+
+Clustering answers the question: "Given a dataset with no predefined categories,
+what natural groupings exist?"
+
+Real-world applications:
+  - Customer segmentation (this project)
+  - Document/topic grouping (Google News clustering similar articles)
+  - Image compression (pixel colour quantisation)
+  - Anomaly detection (outliers = points that don't fit any cluster)
+  - Genomics (grouping genes with similar expression patterns)
+  - Social network community detection
+  - Inventory categorisation (ABC analysis)
+  - Medical sub-type discovery (e.g., sub-types of cancer)
+
+Clustering is fundamentally exploratory. Unlike regression or classification,
+there is no single "correct" answer. Two analysts using different algorithms
+or different feature sets may produce equally valid but different clusterings
+of the same data. The quality of a clustering is judged by how well it serves
+the downstream business or scientific objective.
+
+
+────────────────────────────────────────────────────────────────────────────────
+11.2 THE CORE IDEA: SIMILARITY AND DISTANCE
+────────────────────────────────────────────────────────────────────────────────
+
+Every clustering algorithm is built on some notion of how similar or different
+two points are. This is almost always formalised as a DISTANCE METRIC.
+
+11.2.1 Euclidean Distance (L2 norm)
+  The straight-line distance between two points in n-dimensional space.
+  For points A = (a1, a2, ..., an) and B = (b1, b2, ..., bn):
+
+    d(A, B) = sqrt( (a1-b1)^2 + (a2-b2)^2 + ... + (an-bn)^2 )
+
+  This is the most commonly used distance metric. It is intuitive and works
+  well when features are on similar scales and have roughly Gaussian
+  distributions. It is sensitive to outliers (the squared term amplifies large
+  differences). K-Means uses Euclidean distance by default.
+
+11.2.2 Manhattan Distance (L1 norm / City Block Distance)
+  The sum of absolute differences along each dimension:
+
+    d(A, B) = |a1-b1| + |a2-b2| + ... + |an-bn|
+
+  Imagine navigating a grid city — you can only move horizontally or
+  vertically. Manhattan distance is more robust to outliers than Euclidean
+  because it does not square the differences. Preferred for high-dimensional
+  sparse data.
+
+11.2.3 Minkowski Distance
+  A generalisation of both Euclidean and Manhattan:
+
+    d(A, B) = ( |a1-b1|^p + |a2-b2|^p + ... + |an-bn|^p )^(1/p)
+
+  p=1 → Manhattan distance
+  p=2 → Euclidean distance
+  p→∞ → Chebyshev distance (maximum difference across any one dimension)
+
+11.2.4 Cosine Similarity
+  Measures the cosine of the angle between two vectors, regardless of
+  their magnitudes:
+
+    cosine_sim(A, B) = (A · B) / (||A|| × ||B||)
+
+  Range: -1 (opposite) to +1 (identical direction).
+  Cosine distance = 1 - cosine_similarity.
+
+  Used extensively in text/NLP clustering (document vectors) because two
+  documents with the same word proportions but different lengths should be
+  considered similar. Not suited for K-Means directly, but used in
+  cosine-based K-Means variants.
+
+11.2.5 Mahalanobis Distance
+  Accounts for correlations between features and different feature variances:
+
+    d(A, B) = sqrt( (A-B)^T × S^-1 × (A-B) )
+
+  where S is the covariance matrix of the data.
+
+  Think of it as Euclidean distance after rotating and scaling the feature
+  space so all features have equal variance and zero covariance. It correctly
+  handles situations where features are correlated — Euclidean would treat
+  correlated features as independently informative.
+
+11.2.6 Hamming Distance
+  For categorical features: count of positions where two vectors differ.
+  Used in K-Modes clustering (the categorical analogue of K-Means).
+
+11.2.7 Why Distance Metric Choice Matters
+  Different metrics emphasise different aspects of similarity. Euclidean
+  works well for continuous, scaled, roughly Gaussian features. Manhattan is
+  more robust with outliers. Cosine ignores magnitude. The choice of distance
+  metric is as important as the choice of clustering algorithm itself.
+
+
+────────────────────────────────────────────────────────────────────────────────
+11.3 TYPES OF CLUSTERING ALGORITHMS
+────────────────────────────────────────────────────────────────────────────────
+
+Clustering algorithms fall into several broad families:
+
+11.3.1 Partitioning / Centroid-Based
+  Divide data into k non-overlapping subsets. Each point belongs to exactly
+  one cluster. The cluster is represented by a centroid (mean) or medoid.
+
+  Examples: K-Means, K-Medoids (PAM), K-Modes (categorical data)
+  Best for: Compact, spherical clusters of similar size
+  Weakness: Must specify k in advance; assumes convex cluster shapes
+
+11.3.2 Density-Based
+  Clusters are dense regions separated by sparse regions. Points in low-
+  density areas are labelled as noise/outliers.
+
+  Examples: DBSCAN, HDBSCAN, OPTICS
+  Best for: Arbitrarily shaped clusters, datasets with outliers
+  Weakness: Struggles with varying density across clusters; sensitive to eps
+
+11.3.3 Hierarchical
+  Build a tree (dendrogram) of nested clusters. Can be:
+    - Agglomerative (bottom-up): Start with each point as its own cluster,
+      repeatedly merge the closest pair.
+    - Divisive (top-down): Start with one cluster containing all points,
+      recursively split.
+
+  Examples: Ward linkage, Complete linkage, Single linkage, BIRCH
+  Best for: When the number of clusters is unknown, when hierarchy is meaningful
+  Weakness: Computationally expensive O(n^2 log n); no natural k selection
+
+11.3.4 Model-Based (Probabilistic)
+  Assume data is generated from a mixture of probability distributions.
+  Each cluster corresponds to one distribution. Points are assigned to clusters
+  via probability (soft assignment).
+
+  Examples: Gaussian Mixture Models (GMM), Latent Dirichlet Allocation (LDA)
+  Best for: Overlapping clusters, when uncertainty in assignment is meaningful
+  Weakness: Assumes a specific data generating process; can fail if wrong
+
+11.3.5 Graph-Based / Spectral
+  Treat data as a graph where edges represent similarity between points.
+  Use graph partitioning techniques (eigenvectors of the Laplacian matrix)
+  to find clusters.
+
+  Examples: Spectral Clustering, Community Detection
+  Best for: Non-convex clusters, manifold structures
+  Weakness: Computationally expensive for large datasets; requires similarity
+  graph construction
+
+11.3.6 Grid-Based
+  Quantise the feature space into a finite grid and cluster grid cells.
+  Very fast for spatial data.
+
+  Examples: STING, CLIQUE
+  Best for: Spatial data, very large datasets
+  Weakness: Cluster quality depends heavily on grid resolution
+
+11.3.7 Fuzzy Clustering
+  Unlike hard clustering (each point belongs to exactly one cluster), fuzzy
+  clustering assigns each point a membership degree (0 to 1) to each cluster.
+
+  Examples: Fuzzy C-Means
+  Best for: When cluster boundaries are inherently ambiguous
+  Weakness: Hard to interpret the resulting soft assignments
+
+
+────────────────────────────────────────────────────────────────────────────────
+11.4 K-MEANS CLUSTERING — DEEP DIVE
+────────────────────────────────────────────────────────────────────────────────
+
+K-Means is the most widely used clustering algorithm. It is fast, scalable,
+and intuitive. Understanding it deeply is essential for any data scientist.
+
+11.4.1 The Objective Function
+  K-Means minimises the Within-Cluster Sum of Squares (WCSS), also called
+  inertia:
+
+    WCSS = Σ_k Σ_{x in C_k} ||x - μ_k||^2
+
+  where:
+    k = cluster index (1 to K)
+    C_k = set of points assigned to cluster k
+    μ_k = centroid (mean) of cluster k
+    ||x - μ_k||^2 = squared Euclidean distance from point x to centroid
+
+  The goal is to find the assignment of points to clusters and the positions
+  of centroids that minimise WCSS. This is an NP-hard problem in general,
+  so K-Means uses an iterative heuristic that finds a local (not global) minimum.
+
+11.4.2 The Algorithm (Lloyd's Algorithm)
+  Step 1 — INITIALISE
+    Randomly select k points from the dataset as initial centroids.
+    (Standard random init; K-Means++ improves this — see 11.4.4)
+
+  Step 2 — ASSIGN
+    For each point x in the dataset, assign it to the nearest centroid:
+      cluster(x) = argmin_k ||x - μ_k||^2
+    This creates k clusters.
+
+  Step 3 — UPDATE
+    Recompute each centroid as the mean of all points assigned to it:
+      μ_k = (1/|C_k|) × Σ_{x in C_k} x
+
+  Step 4 — REPEAT
+    Go back to Step 2 and re-assign all points to the nearest updated centroid.
+    Repeat Steps 2–3 until convergence.
+
+  CONVERGENCE is reached when either:
+    a) No point changes cluster assignment between two iterations, OR
+    b) The change in WCSS between iterations falls below a threshold, OR
+    c) A maximum number of iterations is reached (default 300 in scikit-learn)
+
+  The algorithm is guaranteed to converge (WCSS decreases or stays the same
+  at every iteration) but may converge to a LOCAL MINIMUM.
+
+11.4.3 Geometric Intuition
+  Imagine plotting all your data points in 2D space. K-Means is essentially:
+    - Place k "centre of gravity" points (centroids) in the space
+    - Each data point gets pulled to its nearest centre of gravity
+    - Each centre of gravity moves to the actual centre of its assigned points
+    - Repeat until nothing moves anymore
+
+  The boundaries between clusters are always straight lines (hyperplanes in
+  higher dimensions). This is why K-Means can ONLY find linearly separable,
+  roughly spherical/convex clusters. It cannot find clusters shaped like
+  crescents, rings, or interleaved spirals.
+
+11.4.4 K-Means++ Initialisation
+  Standard random initialisation can lead to poor local minima (e.g., two
+  initial centroids placed very close together). K-Means++ uses a smarter
+  initialisation strategy:
+
+    Step 1: Choose the first centroid uniformly at random from the data.
+    Step 2: For each remaining point x, compute its distance D(x) to the
+            nearest already-chosen centroid.
+    Step 3: Choose the next centroid with probability proportional to D(x)^2.
+            Points far from all existing centroids are more likely to be chosen.
+    Step 4: Repeat Steps 2–3 until k centroids are chosen.
+
+  This "spread out" initialisation dramatically reduces the chance of
+  converging to a poor local minimum. Scikit-learn uses K-Means++ by default
+  (init='k-means++').
+
+  Theoretical guarantee: K-Means++ achieves an expected WCSS within O(log k)
+  of the global optimum, vs no such guarantee for random initialisation.
+
+11.4.5 Multiple Random Restarts
+  Because K-Means finds local minima, the standard practice is to run the
+  algorithm multiple times with different random initialisations and keep
+  the best result (lowest WCSS). Scikit-learn's default is n_init=10 — it
+  runs K-Means 10 times and returns the best run.
+
+11.4.6 Complexity
+  Time:  O(n × k × d × i)
+    n = number of data points
+    k = number of clusters
+    d = number of features (dimensions)
+    i = number of iterations until convergence
+
+  Space: O(n × d + k × d) — store all points and k centroids
+
+  For practical datasets (n < 1M, k < 100), K-Means is very fast.
+  For very large n, Mini-Batch K-Means processes random subsets (mini-batches)
+  at each iteration, dramatically reducing computation at a small cost in
+  cluster quality.
+
+11.4.7 Assumptions and Limitations
+  K-Means makes several implicit assumptions about the data:
+
+  Assumption 1 — SPHERICAL CLUSTERS
+    Clusters are assumed to be roughly spherical (equal in all directions).
+    K-Means will struggle if clusters are elongated, cigar-shaped, or have
+    very different orientations.
+
+  Assumption 2 — SIMILAR SIZE
+    K-Means tends to produce clusters of similar size because centroid
+    placement balances point assignments. Very unequal cluster sizes cause
+    the algorithm to split large clusters incorrectly.
+
+  Assumption 3 — SIMILAR DENSITY
+    K-Means cannot handle clusters of very different densities. A sparse large
+    cluster may be split while a dense small cluster stays intact.
+
+  Assumption 4 — NUMERIC FEATURES
+    K-Means requires computing means, so features must be numeric. Categorical
+    data requires K-Modes or encoding.
+
+  Assumption 5 — k IS KNOWN
+    You must specify k before running the algorithm. In practice, this is
+    determined by running the algorithm for multiple values of k and using
+    validation metrics (see Section 11.6).
+
+  Assumption 6 — FEATURES ARE SCALED
+    Because K-Means uses Euclidean distance, features with larger numeric
+    ranges dominate the distance calculation. Always standardise (zero mean,
+    unit variance) or normalise (0–1 range) features before running K-Means.
+
+11.4.8 When K-Means Fails
+  K-Means will produce misleading results in these situations:
+    - Two interleaved half-moons (non-convex shapes): use DBSCAN or Spectral
+    - Clusters of very different sizes: use GMM or HDBSCAN
+    - Clusters with very different densities: use DBSCAN or HDBSCAN
+    - Data with many outliers: use DBSCAN (labels outliers as noise)
+    - Categorical data: use K-Modes or encode and use K-Means carefully
+    - Very high-dimensional data: reduce dimensions first with PCA or UMAP
+
+
+────────────────────────────────────────────────────────────────────────────────
+11.5 FEATURE PREPROCESSING FOR CLUSTERING
+────────────────────────────────────────────────────────────────────────────────
+
+This is one of the most overlooked aspects of clustering. The quality of
+clusters depends heavily on how features are prepared.
+
+11.5.1 Why Scaling Is Non-Negotiable for K-Means
+  Imagine two features: Age (range 0–100) and Income (range 0–1,000,000).
+  Without scaling, the Euclidean distance between two customers is dominated
+  entirely by the Income difference — Age contributes almost nothing.
+  K-Means effectively clusters on Income alone.
+
+  Two common scaling strategies:
+    a) StandardScaler (Z-score normalisation): x' = (x - mean) / std
+       → Zero mean, unit variance. Works well for Gaussian-ish distributions.
+    b) MinMaxScaler: x' = (x - min) / (max - min)
+       → Scales to [0, 1]. Sensitive to outliers.
+
+  StandardScaler is almost always preferred for clustering.
+
+11.5.2 Outlier Treatment
+  A single extreme outlier (e.g., a customer who spent £500,000 in one order)
+  can pull a centroid far from the true cluster centre. Two approaches:
+    a) Capping: Replace values above the 99th percentile with the 99th
+       percentile value. Preserves relative ordering, reduces outlier influence.
+    b) Trimming: Remove outlier rows entirely (only if they truly represent
+       noise or errors, not valid extreme cases).
+  This project uses 99th percentile capping.
+
+11.5.3 Log Transformation
+  Right-skewed features (like revenue, frequency, income) compress the high
+  end and expand the low end after log transformation. This makes the
+  distribution more Gaussian-like, which satisfies K-Means' implicit
+  normality assumption and reduces the effect of extreme values even after
+  capping.
+
+  Rule of thumb: Apply log(x+1) if the feature has heavy right skew (skewness
+  > 1 or a long right tail in the histogram). The +1 handles zero values.
+
+11.5.4 Handling Multicollinearity
+  If two features are highly correlated (e.g., Revenue and Frequency × AOV),
+  they carry redundant information and that direction in feature space is
+  double-counted in distance calculations. Options:
+    a) Remove one of the correlated features
+    b) Use PCA to create orthogonal (uncorrelated) components first, then
+       cluster on PCA scores
+
+11.5.5 Feature Selection
+  Not all features improve clustering. Irrelevant features add noise to the
+  distance calculation ("the curse of dimensionality"). Common strategies:
+    a) Domain knowledge: Include only features that capture meaningful
+       behavioural differences between expected groups
+    b) Variance filtering: Remove near-zero-variance features (they add noise
+       but no signal)
+    c) Correlation analysis: Remove highly correlated features (keep one)
+    d) PCA: Project to the top-k principal components that explain most variance
+
+
+────────────────────────────────────────────────────────────────────────────────
+11.6 CHOOSING K — METHODS FOR FINDING THE RIGHT NUMBER OF CLUSTERS
+────────────────────────────────────────────────────────────────────────────────
+
+This is arguably the hardest problem in K-Means clustering. There is no single
+objectively correct answer — different methods often disagree.
+
+11.6.1 The Elbow Method (Inertia / WCSS)
+  Run K-Means for k = 1, 2, 3, ..., n_max and plot WCSS vs k.
+  As k increases, WCSS always decreases (adding more clusters always reduces
+  within-cluster variance). The plot looks like an arm bending at the elbow —
+  the "elbow point" is where the rate of decrease sharply slows down.
+
+  Interpretation: The elbow suggests diminishing returns from adding more
+  clusters. Beyond the elbow, each additional cluster is splitting an already
+  tight cluster rather than separating genuinely different groups.
+
+  Weakness: The elbow is often subjective and not clearly defined. Some datasets
+  produce smooth curves with no obvious elbow. Not reliable on its own.
+
+11.6.2 Silhouette Score
+  For each point i, the silhouette score is:
+
+    s(i) = (b(i) - a(i)) / max(a(i), b(i))
+
+  where:
+    a(i) = average distance from point i to all other points in its cluster
+           (intra-cluster cohesion)
+    b(i) = average distance from point i to all points in the NEAREST
+           other cluster (inter-cluster separation)
+
+  The overall silhouette score is the mean of s(i) across all points.
+  Range: -1 to +1.
+    +1 → Point is well inside its own cluster and far from others (ideal)
+     0 → Point is on the boundary between two clusters
+    -1 → Point is more similar to another cluster than its own (misclassified)
+
+  Choose k that maximises the silhouette score. This is more rigorous than
+  the elbow method.
+
+  Silhouette plot: Shows the silhouette score of every individual point,
+  grouped by cluster. All bars above zero and similar widths indicate a
+  good, balanced clustering.
+
+11.6.3 Davies-Bouldin Index
+  For each cluster i, compute the ratio of its average intra-cluster scatter
+  to its distance from every other cluster j:
+
+    R_ij = (s_i + s_j) / d_ij
+
+  where s_i = average distance from points in cluster i to centroid i,
+        d_ij = distance between centroids i and j.
+
+  DB Index = (1/k) × Σ_i max_{j≠i}(R_ij)
+
+  LOWER is BETTER (unlike silhouette where higher is better).
+  Measures: Are clusters compact internally and well-separated from each other?
+
+11.6.4 Calinski-Harabasz Index (Variance Ratio Criterion)
+  Ratio of between-cluster variance to within-cluster variance:
+
+    CH = [B / (k-1)] / [W / (n-k)]
+
+  where B = between-cluster variance, W = within-cluster variance.
+  HIGHER is BETTER.
+
+  Very fast to compute. Tends to favour compact, well-separated clusters.
+  Often biased toward smaller k values.
+
+11.6.5 Gap Statistic
+  Compares the WCSS of the clustering to what would be expected from a
+  random uniform distribution:
+
+    Gap(k) = E[log(WCSS_random)] - log(WCSS_observed)
+
+  Choose k where Gap(k) is maximised, or more precisely, the smallest k
+  where Gap(k) >= Gap(k+1) - s_{k+1} (one standard error rule).
+
+  This is the most statistically rigorous method. It explicitly tests whether
+  the clustering is better than chance. However, it is computationally expensive
+  (requires generating and clustering multiple random datasets).
+
+11.6.6 Business/Domain Constraints
+  CRITICALLY IMPORTANT: The "mathematically optimal" k is not always the
+  "most useful" k. This project is a prime example:
+    - Silhouette score peaks at k=2 (mathematically optimal)
+    - k=2 is commercially useless ("valuable" vs "not valuable" customers)
+    - k=4 (Champions, Loyal, At-Risk, Lapsed) maps to real CRM actions
+    - k=4 was chosen as a deliberate business decision
+
+  Always layer domain knowledge on top of statistical metrics. A k that aligns
+  with operational capacity (how many distinct campaigns can the marketing team
+  run?) is often more valuable than the metric-optimal k.
+
+11.6.7 Practical Guidance
+  In practice, use multiple methods and look for consensus:
+    1. Plot the elbow curve to get a rough range
+    2. Compute silhouette, DB, and CH scores for k in that range
+    3. Visualise clusters at candidate k values (PCA 2D plot)
+    4. Apply domain knowledge to select the final k
+  No single method is universally correct.
+
+
+────────────────────────────────────────────────────────────────────────────────
+11.7 DBSCAN — DENSITY-BASED SPATIAL CLUSTERING
+────────────────────────────────────────────────────────────────────────────────
+
+DBSCAN (Density-Based Spatial Clustering of Applications with Noise) is a
+fundamentally different approach from K-Means. Instead of minimising variance,
+it finds regions of high density separated by regions of low density.
+
+11.7.1 Core Concepts
+  Two hyperparameters:
+    eps (ε):          The neighbourhood radius. Two points are considered
+                      "neighbours" if their distance is ≤ eps.
+    min_samples:      The minimum number of points required within eps-radius
+                      for a point to be classified as a "core point".
+
+  Three point types:
+    CORE POINT:       Has at least min_samples neighbours within eps radius.
+                      Forms the dense interior of a cluster.
+    BORDER POINT:     Falls within eps of a core point but does not have
+                      enough neighbours of its own. On the cluster boundary.
+    NOISE POINT:      Neither core nor border. Labelled -1 (outlier).
+
+11.7.2 The Algorithm
+  Step 1: For each unvisited point p:
+    Step 2: Mark p as visited.
+    Step 3: Find all points within eps-distance of p (the neighbourhood).
+    Step 4: If neighbourhood size < min_samples → mark p as noise.
+    Step 5: If neighbourhood size >= min_samples → p is a core point.
+            Create a new cluster C and add p to it.
+    Step 6: Expand C: for each neighbour q of p:
+              - If q is unvisited: visit q recursively (density-reachability)
+              - Add q to C if it is a core point or border point
+    Step 7: Continue until no more points can be added to C.
+  Repeat for all unvisited points.
+
+11.7.3 Density Reachability
+  A point q is DIRECTLY DENSITY-REACHABLE from p if:
+    - p is a core point
+    - q is within eps of p
+
+  A point q is DENSITY-REACHABLE from p if there is a chain of points
+  p = p1, p2, ..., pn = q where each pi+1 is directly density-reachable from pi.
+
+  Clusters are sets of mutually density-connected points. This allows DBSCAN
+  to find arbitrarily shaped clusters — snaking, crescent-shaped, nested rings —
+  that K-Means cannot handle.
+
+11.7.4 Advantages Over K-Means
+  a) Does NOT require k to be specified in advance
+  b) Can find arbitrarily shaped clusters
+  c) Naturally identifies outliers as noise (label = -1)
+  d) Robust to outliers — they don't distort cluster shapes
+  e) Clusters of varying sizes handled naturally
+
+11.7.5 Disadvantages
+  a) Two hyperparameters (eps, min_samples) are sensitive and hard to tune
+  b) Fails with varying density: a cluster that is dense in one region and
+     sparse in another may be split or partially labelled as noise
+  c) High-dimensional data: distances become meaningless in high dimensions
+     (curse of dimensionality) — DBSCAN relies on meaningful local distance
+  d) Not deterministic for border points: a border point's cluster assignment
+     depends on which core point it is reached from
+
+11.7.6 Choosing eps and min_samples
+  Rule of thumb for min_samples: Use 2 × number of features as a starting
+  point. Higher min_samples = stricter density requirement = more noise points.
+
+  For eps — the k-distance graph method:
+    1. For each point, compute its distance to the kth nearest neighbour
+       (where k = min_samples)
+    2. Sort these distances in ascending order and plot them
+    3. The "elbow" in this k-distance graph suggests a good eps value —
+       below the elbow, points are core; above it, they are noise
+
+  In practice, this often requires manual tuning with domain knowledge.
+
+11.7.7 HDBSCAN (Hierarchical DBSCAN)
+  An extension of DBSCAN that uses a range of eps values simultaneously.
+  It builds a hierarchy of density-based clusters and extracts the most
+  stable ones. Key advantage: handles varying density much better than
+  DBSCAN. Only requires min_samples (no eps). Generally produces better
+  results than DBSCAN for real-world data.
+
+
+────────────────────────────────────────────────────────────────────────────────
+11.8 HIERARCHICAL CLUSTERING
+────────────────────────────────────────────────────────────────────────────────
+
+Hierarchical clustering builds a tree of nested clusters (a dendrogram)
+without needing to specify k in advance. The user can cut the tree at any
+level to get the desired number of clusters.
+
+11.8.1 Agglomerative Clustering (Bottom-Up)
+  Start: Each of n points is its own cluster → n clusters.
+  Merge: At each step, merge the two closest clusters.
+  Repeat: Until all points are in one cluster → 1 cluster.
+  Result: A dendrogram showing the merge history.
+
+  The vertical axis of the dendrogram represents the distance (or linkage
+  criterion value) at which clusters were merged. Long vertical lines indicate
+  well-separated clusters. Short lines indicate closely-related clusters.
+
+  To get k clusters: Cut the dendrogram horizontally so that k clusters
+  are formed below the cut.
+
+11.8.2 Linkage Criteria
+  The key design choice in agglomerative clustering is how to measure the
+  distance between two clusters (not just two points):
+
+  Single Linkage:   Distance between closest points in the two clusters.
+                    min d(a, b) for a in C1, b in C2.
+                    Produces long, "chaining" clusters. Sensitive to outliers.
+
+  Complete Linkage: Distance between farthest points in the two clusters.
+                    max d(a, b) for a in C1, b in C2.
+                    Produces compact, spherical clusters. Sensitive to outliers.
+
+  Average Linkage:  Average distance between all pairs of points across clusters.
+                    (1/|C1||C2|) × Σ_a Σ_b d(a, b).
+                    Compromise between single and complete. Robust.
+
+  Ward Linkage:     Merge the two clusters that minimise the increase in
+                    total WCSS. Tends to produce clusters of similar sizes.
+                    Most commonly used in practice. Produces compact,
+                    well-separated clusters similar to K-Means.
+
+11.8.3 Divisive Clustering (Top-Down)
+  Start with one cluster containing all points. Recursively split the cluster
+  most in need of splitting (e.g., highest within-cluster variance).
+  Less common than agglomerative; DIANA is the classic algorithm.
+
+11.8.4 Complexity
+  Naive agglomerative clustering: O(n^3) time, O(n^2) space.
+  With fast algorithms (NN-chain): O(n^2 log n).
+  Both are prohibitive for n > ~10,000. For large datasets, use a random
+  sample (e.g., 300–1000 points) for dendrogram visualisation.
+
+11.8.5 How to Read a Dendrogram
+  - X-axis: Data points (leaves)
+  - Y-axis: Distance/linkage height at which clusters merge
+  - Horizontal lines: Cluster merges
+  - Vertical lines: The height represents how different the merged clusters are
+  - To choose k: Draw a horizontal line where the vertical gaps are largest
+    (large gaps = well-separated clusters). Count the vertical lines the
+    horizontal cuts through = number of clusters.
+
+
+────────────────────────────────────────────────────────────────────────────────
+11.9 GAUSSIAN MIXTURE MODELS (GMM)
+────────────────────────────────────────────────────────────────────────────────
+
+GMM is a probabilistic model that assumes data is generated from a mixture of
+k Gaussian (normal) distributions. Unlike K-Means (hard assignment), GMM
+performs SOFT ASSIGNMENT — each point has a probability of belonging to each
+cluster.
+
+11.9.1 The Model
+  The data is assumed to be generated by:
+    1. Choose component k with probability π_k (the mixing weight, Σπ_k = 1)
+    2. Draw a point from Gaussian N(μ_k, Σ_k)
+
+  Parameters to learn: mixing weights π_k, means μ_k, covariance matrices Σ_k.
+
+11.9.2 Expectation-Maximisation (EM) Algorithm
+  The EM algorithm alternates between two steps:
+
+  E-step (Expectation): Compute the probability that each point belongs to
+    each component, given current parameter estimates (the "responsibilities").
+
+  M-step (Maximisation): Update the parameters (means, covariances, weights)
+    to maximise the expected log-likelihood given the responsibilities.
+
+  Repeat until convergence (log-likelihood stops increasing).
+
+11.9.3 Covariance Matrix Options
+  The covariance matrix Σ_k controls the shape, size, and orientation of
+  each Gaussian blob:
+    'spherical': All features have the same variance; circular clusters
+    'diagonal':  Features are independent; axis-aligned ellipses
+    'tied':      All clusters share the same covariance; same shape
+    'full':      Each cluster has its own unrestricted covariance; most flexible
+
+  The 'full' option is closest to K-Means but allows non-spherical clusters.
+
+11.9.4 Advantages Over K-Means
+  a) Soft assignments → uncertainty quantification ("point is 70% cluster A,
+     30% cluster B")
+  b) Handles elliptical cluster shapes
+  c) Natural model selection via BIC/AIC (model selection criteria)
+  d) Theoretically grounded as a generative probabilistic model
+
+11.9.5 When GMM Beats K-Means
+  When clusters overlap (hard boundaries are unrealistic), when cluster shapes
+  are non-spherical, or when you need a probabilistic output. K-Means is a
+  special case of GMM (spherical covariance, uniform weights, hard assignments).
+
+
+────────────────────────────────────────────────────────────────────────────────
+11.10 PRINCIPAL COMPONENT ANALYSIS (PCA)
+────────────────────────────────────────────────────────────────────────────────
+
+PCA is a dimensionality reduction technique, not a clustering algorithm. But
+it is almost always used alongside clustering for two purposes:
+  1. Visualisation: Project high-dimensional clusters to 2D or 3D for plotting
+  2. Preprocessing: Reduce dimensionality before clustering to fight the
+     curse of dimensionality
+
+11.10.1 The Core Idea
+  PCA finds new axes (principal components) that maximise the variance in the
+  data. The first principal component (PC1) explains the most variance; PC2
+  explains the most remaining variance while being orthogonal to PC1; and so on.
+
+  Mathematically: PCA computes the eigenvectors of the feature covariance matrix.
+  Each eigenvector (principal component) is a linear combination of original
+  features. The corresponding eigenvalue tells you how much variance that
+  component explains.
+
+11.10.2 The Algorithm
+  Step 1: Standardise the data (zero mean, unit variance)
+  Step 2: Compute the covariance matrix C = X^T × X / (n-1)
+  Step 3: Compute eigenvectors and eigenvalues of C
+  Step 4: Sort eigenvectors by descending eigenvalue (most → least variance)
+  Step 5: Project data onto the top k eigenvectors: Z = X × W_k
+          where W_k = matrix of top k eigenvectors (loadings)
+
+11.10.3 How Much Variance to Retain
+  Plot the cumulative explained variance ratio (scree plot):
+  - If the first 2 components explain 80%+ of variance, a 2D PCA plot is
+    a reliable visualisation
+  - A common rule: retain enough components to explain 80–95% of total variance
+  - The "elbow" in the scree plot (where adding components gives diminishing
+    returns) suggests a natural cut-off
+
+11.10.4 PCA for Clustering Visualisation
+  After clustering in the full feature space, project to 2D using PCA and
+  colour points by cluster label. If clusters are well-separated in 2D PCA
+  space, this is strong visual evidence the clustering is meaningful.
+
+  Important caveat: PCA 2D is a projection — some inter-cluster separation
+  may be in dimensions not shown. Clusters that overlap in 2D PCA may still
+  be well-separated in the full space.
+
+11.10.5 PCA vs UMAP vs t-SNE
+  For visualisation of very high-dimensional data or when clusters have
+  non-linear structure:
+    PCA:   Linear, fast, globally preserves variance. Best for overview.
+    t-SNE: Non-linear, preserves local neighbourhood structure. Good for
+           seeing fine-grained cluster sub-structure. NOT suitable for
+           clustering preprocessing (it distorts global distances).
+    UMAP:  Non-linear, preserves both local and global structure. Faster
+           than t-SNE. Increasingly popular for both visualisation and
+           as a preprocessing step before clustering.
+
+
+────────────────────────────────────────────────────────────────────────────────
+11.11 CLUSTER EVALUATION METRICS
+────────────────────────────────────────────────────────────────────────────────
+
+Evaluating clustering is hard because there is no ground truth label to
+compare against (that's the whole point — it's unsupervised). Two families
+of evaluation metrics:
+
+11.11.1 Internal Metrics (No Ground Truth Needed)
+  These measure cluster quality using only the data and cluster assignments.
+
+  Inertia / WCSS:
+    Sum of squared distances from each point to its centroid.
+    Lower = better. Used for elbow method. Not comparable across datasets.
+
+  Silhouette Score:
+    Range [-1, +1]. Measures cohesion vs separation. Higher = better.
+    Best all-around internal metric. Interpretable.
+
+  Davies-Bouldin Index:
+    Ratio of intra-cluster scatter to inter-cluster separation.
+    Lower = better. Similar intuition to silhouette.
+
+  Calinski-Harabasz Index:
+    Ratio of between-cluster to within-cluster variance. Higher = better.
+    Biased toward compact clusters and smaller k.
+
+  Dunn Index:
+    Ratio of minimum inter-cluster distance to maximum intra-cluster diameter.
+    Higher = better. Computationally expensive for large datasets.
+
+11.11.2 External Metrics (Require Ground Truth Labels)
+  Used when you have true labels (e.g., for benchmarking on known datasets).
+
+  Adjusted Rand Index (ARI):
+    Measures agreement between true labels and cluster labels, corrected
+    for chance. Range [-1, +1], where 1 = perfect match, 0 = random.
+    Commonly used for cluster stability testing (compare cluster labels
+    across runs with different random seeds — high ARI = stable solution).
+
+  Normalised Mutual Information (NMI):
+    Measures how much information the cluster labels share with true labels.
+    Range [0, 1]. Symmetric: NMI(cluster, true) = NMI(true, cluster).
+
+  Fowlkes-Mallows Index:
+    Geometric mean of precision and recall for cluster pairs.
+    Range [0, 1]. More intuitive than ARI for imbalanced clusters.
+
+  Homogeneity, Completeness, V-Measure:
+    Homogeneity: Each cluster contains only members of a single true class.
+    Completeness: All members of a true class are in the same cluster.
+    V-Measure: Harmonic mean of homogeneity and completeness.
+
+
+────────────────────────────────────────────────────────────────────────────────
+11.12 CLUSTER STABILITY
+────────────────────────────────────────────────────────────────────────────────
+
+A good clustering should not be overly sensitive to the random seed or small
+perturbations in the data. Stability analysis tests this.
+
+11.12.1 Seed Stability (Adjusted Rand Index across seeds)
+  Run K-Means n times with different random seeds. For each pair of runs,
+  compute ARI between the cluster assignments. High average ARI across pairs
+  indicates the solution is stable.
+
+  This project ran 10 seeds and computed ARI. An ARI close to 1.0 means the
+  same 4-group structure is consistently recovered regardless of initialisation.
+
+11.12.2 Bootstrap Stability
+  Repeatedly draw bootstrap samples of the data (sampling with replacement),
+  cluster each sample, and assess how consistently points are assigned to
+  the same cluster across bootstrap iterations. The "clue" R package
+  implements this. Computationally expensive.
+
+11.12.3 Data Perturbation
+  Add small amounts of noise to the feature values and re-cluster. If the
+  cluster assignments are nearly identical, the clustering is robust. If they
+  change drastically, the cluster boundaries may be arbitrary.
+
+
+────────────────────────────────────────────────────────────────────────────────
+11.13 THE CURSE OF DIMENSIONALITY
+────────────────────────────────────────────────────────────────────────────────
+
+In high-dimensional spaces (many features), distance-based clustering breaks
+down. This is called the curse of dimensionality:
+
+  1. All points become equidistant: In very high dimensions, the ratio of the
+     maximum to minimum distance between any two points approaches 1. Euclidean
+     distance loses discriminative power — everything is "far" from everything else.
+
+  2. Data becomes sparse: A unit hypercube in d dimensions has volume 1, but
+     a hypersphere inscribed in it has volume π^(d/2) / (2^d × Γ(d/2 + 1)),
+     which shrinks to essentially 0 as d grows. All points cluster near the
+     surface (corners) of the hypercube.
+
+  3. Neighbourhood structure degrades: Nearest-neighbour relationships that
+     are meaningful in 2D or 3D become unreliable in 100D.
+
+Solutions:
+  - Dimensionality reduction before clustering (PCA, UMAP, autoencoders)
+  - Feature selection (keep only informative features)
+  - Use algorithms designed for high-d data (cosine distance, spectral methods)
+  - Regularisation (sparse clustering, LASSO-penalised clustering)
+
+Rule of thumb: If you have more than ~20 features, consider reducing dimensionality
+before clustering. The "sweet spot" for Euclidean-distance-based clustering is
+roughly 2–15 features.
+
+
+────────────────────────────────────────────────────────────────────────────────
+11.14 RFM ANALYSIS — THE FRAMEWORK BEHIND THIS PROJECT
+────────────────────────────────────────────────────────────────────────────────
+
+RFM stands for Recency, Frequency, Monetary — a classical customer analytics
+framework originating in direct mail marketing in the 1990s.
+
+11.14.1 The Three Classic Dimensions
+  Recency (R):    How recently did the customer last purchase?
+                  Lower recency = more recently active = higher engagement.
+  Frequency (F):  How often does the customer purchase?
+                  Higher frequency = more loyal, habitual buyer.
+  Monetary (M):   How much has the customer spent in total?
+                  Higher monetary = higher revenue contribution.
+
+  The intuition: A customer who bought yesterday, buys every week, and has
+  spent £1,000 is very different from one who last bought 18 months ago,
+  bought twice ever, and spent £20. RFM captures these differences with just
+  three features.
+
+11.14.2 Traditional RFM Scoring
+  In the original RFM model (before machine learning), customers were scored
+  on each dimension on a 1–5 scale using quintiles:
+    R=5: Most recent 20% of customers
+    R=1: Least recent 20% of customers
+    ... and similarly for F and M.
+
+  Customers were then segmented by their RFM score (e.g., "555" = Champions,
+  "111" = Lapsed). This produces 125 possible segments (5^3).
+
+11.14.3 RFM + Machine Learning
+  In modern practice, R/F/M values are used as raw features fed into clustering
+  algorithms (K-Means, GMM) rather than manually binned. This allows the data
+  to determine natural cluster boundaries rather than imposing fixed quintile cuts.
+
+  Extended RFM features (as used in this project):
+    AOV (Average Order Value) = M / F
+    BasketSize = average units per transaction
+    Tenure = days between first and last purchase
+    These add richer behavioural signal beyond the classic 3 dimensions.
+
+11.14.4 Business Value of RFM Segmentation
+  Different segments call for different CRM strategies:
+
+  Champions (high R, high F, high M):
+    Reward loyalty; invite to VIP program; ask for reviews; use as brand advocates.
+
+  Loyal Customers (medium-high across all):
+    Offer membership/loyalty programs; upsell to higher value products;
+    engage with new launches.
+
+  At-Risk (low R, but previously high F and M):
+    Win-back campaigns; personalised re-engagement emails; special offers.
+    These are the highest-priority segment for retention spend.
+
+  Lapsed / Low-Value (low R, low F, low M):
+    Reactive re-engagement only; low investment; sunset low-engagement contacts
+    to improve email deliverability.
+
+
+────────────────────────────────────────────────────────────────────────────────
+11.15 ABC ANALYSIS / PARETO PRINCIPLE
+────────────────────────────────────────────────────────────────────────────────
+
+ABC analysis is not a clustering technique but a classification framework for
+prioritising items based on their contribution to a key metric (usually revenue).
+
+11.15.1 The Pareto Principle (80/20 Rule)
+  Vilfredo Pareto observed in 1896 that ~80% of land in Italy was owned by
+  ~20% of the population. This 80/20 relationship appears repeatedly in
+  business: 80% of revenue from 20% of products, 80% of support tickets from
+  20% of features, etc.
+
+11.15.2 ABC Classification
+  A-class: Items contributing the top 80% of cumulative revenue
+            (typically ~20% of SKUs). High value, high attention.
+  B-class: Items contributing the next 15% of cumulative revenue
+            (typically ~30% of SKUs). Medium value.
+  C-class: Items contributing the bottom 5% of cumulative revenue
+            (typically ~50% of SKUs). Low value individually.
+
+  The thresholds (80%/95%) are configurable. Different industries use
+  different splits (e.g., 70/20/10 or 80/15/5).
+
+11.15.3 Applications in Retail
+  - Inventory management: Stock A items heavily, C items lightly
+  - Purchasing: Negotiate hard on A-item supplier contracts
+  - Marketing: Feature A items prominently; C items may be discontinued
+  - Pricing: Less price sensitivity on A items (customers want them regardless)
+
+
+────────────────────────────────────────────────────────────────────────────────
+11.16 ADVANCED CLUSTERING TOPICS
+────────────────────────────────────────────────────────────────────────────────
+
+11.16.1 Ensemble Clustering
+  Just as ensemble methods (Random Forest, XGBoost) improve classification by
+  combining many weak classifiers, ensemble clustering combines multiple
+  clustering runs to produce a more robust final clustering.
+
+  Approach: Run K-Means n times (different seeds, possibly different k values).
+  Build a co-occurrence matrix: P[i,j] = fraction of runs where points i and j
+  were in the same cluster. Apply hierarchical or spectral clustering to this
+  co-occurrence matrix to get the final assignment.
+
+  This is computationally expensive but produces very stable clusterings.
+
+11.16.2 Spectral Clustering
+  Uses graph theory: construct a similarity graph between all pairs of points,
+  compute the Laplacian matrix of this graph, extract its eigenvectors, and
+  run K-Means on the eigenvector space.
+
+  Why this works: The eigenvectors of the graph Laplacian capture the manifold
+  structure of the data. Points that are connected via dense paths through the
+  graph will have similar eigenvector representations, even if they are
+  geometrically far apart in the original feature space.
+
+  Can find non-convex clusters (rings, crescents) that K-Means cannot.
+  Computationally expensive: O(n^3) for exact eigendecomposition.
+
+11.16.3 Online / Streaming Clustering
+  For data streams where new points arrive continuously and the full dataset
+  cannot be stored:
+    - Mini-Batch K-Means: Process small random batches sequentially
+    - CluStream: Maintains micro-clusters online, macro-clusters offline
+    - BIRCH: Builds a Clustering Feature Tree for incremental updates
+
+11.16.4 High-Dimensional Clustering
+  Special algorithms for very high-dimensional data (e.g., text, images):
+    - Subspace Clustering: Find clusters in different subsets of features
+      (different clusters may exist in different subspaces)
+    - Sparse K-Means: LASSO-regularised K-Means that automatically selects
+      the most informative features for clustering
+    - Deep Clustering: Use autoencoders or variational autoencoders to learn
+      a latent representation, then cluster in the latent space
+
+11.16.5 Semi-Supervised Clustering
+  When partial labels or pairwise constraints are available:
+    Must-link constraints: "These two points must be in the same cluster"
+    Cannot-link constraints: "These two points must be in different clusters"
+  Constrained K-Means or constraint-based hierarchical clustering incorporates
+  these into the objective function.
+
+11.16.6 Cluster Validation Beyond Metrics
+  Real-world cluster validation extends beyond mathematical metrics:
+    - Business validation: Do the clusters map to actionable, interpretable
+      customer personas? Can each cluster be described in plain language?
+    - Predictive validity: Do clusters predict an external outcome (e.g., churn)?
+      A clustering that predicts churn better than random is externally valid.
+    - Temporal stability: Do customers stay in the same cluster over time?
+      Unstable clusters may reflect noise rather than true structure.
+    - Expert validation: Do domain experts (marketing team, product managers)
+      recognise the cluster descriptions as meaningful customer types?
+
+
+────────────────────────────────────────────────────────────────────────────────
+11.17 SUMMARY — WHEN TO USE WHICH ALGORITHM
+────────────────────────────────────────────────────────────────────────────────
+
+  Situation                           | Recommended Algorithm
+  ------------------------------------|--------------------------------------
+  Compact, spherical clusters; n<1M   | K-Means (or K-Means++)
+  Unknown k; want hierarchy           | Agglomerative (Ward linkage)
+  Arbitrary cluster shapes; outliers  | DBSCAN or HDBSCAN
+  Overlapping clusters; need probs    | Gaussian Mixture Model (GMM)
+  Very high dimensions (>50 features) | PCA/UMAP first, then K-Means
+  Categorical data                    | K-Modes or K-Prototypes
+  Graph/network data                  | Spectral Clustering
+  Streaming/real-time data            | Mini-Batch K-Means
+  Benchmark against ground truth      | Use ARI, NMI, V-Measure
+  No ground truth; exploratory        | Use Silhouette + Davies-Bouldin
+  Business segmentation (CRM)        | K-Means with domain-adjusted k
+  ------------------------------------|--------------------------------------
+
+Key takeaways:
+  1. No algorithm is universally best — match the algorithm to data structure
+  2. Always scale features before distance-based clustering
+  3. Statistical metrics for k selection are starting points, not final answers
+  4. Domain knowledge and business utility should guide final decisions
+  5. Validate clusters with multiple lenses: metrics, plots, and stakeholders
+
+
+--------------------------------------------------------------------------------
+12. KEY TECHNICAL DECISIONS SUMMARY
+--------------------------------------------------------------------------------
+
+  Decision                          | Reason
+  ----------------------------------|------------------------------------------
+  Force k=4                         | Silhouette peaks at k=2 (too coarse for
+                                    | CRM); k=4 = standard 4-tier retail model
+  ----------------------------------|------------------------------------------
+  6 RFM features not 3              | AOV, BasketSize, Tenure add meaningful
+                                    | signal beyond classic RFM
+  ----------------------------------|------------------------------------------
+  99th pct capping + log transform  | Wholesale bulk orders distort cluster
+                                    | geometry without this
+  ----------------------------------|------------------------------------------
+  Radar scaled to [0.1, 0.9]        | [0, 1] scaling collapses weakest cluster
+                                    | to invisible point at origin
+  ----------------------------------|------------------------------------------
+  ABC at 80%/95%                    | Standard Pareto; consistent notebook/app
+  ----------------------------------|------------------------------------------
+  DBSCAN eps=0.8 (fixed, not auto)  | Auto k-distance percentile unreliable
+                                    | for this dataset's density profile
+  ----------------------------------|------------------------------------------
+  Transaction clustering excludes   | Revenue = Qty × Price introduces
+  Revenue as a feature              | multicollinearity into distance calc
+  ----------------------------------|------------------------------------------
+  Pre-computed parquet files        | Avoids reprocessing 44MB CSV on every
+                                    | deployment startup; ~2s load time
+  ----------------------------------|------------------------------------------
+  Streamlit over Dash               | Simpler deployment, no gunicorn needed,
+                                    | push-to-deploy via Streamlit Cloud
+  ----------------------------------|------------------------------------------
+  Recency axis inverted on radar    | All axes follow "bigger = better" so the
+                                    | chart is intuitively readable
+  ----------------------------------|------------------------------------------
+  StandardScaler before K-Means     | Prevents high-magnitude features (like
+                                    | Monetary in £) from dominating distance
+
+
+--------------------------------------------------------------------------------
+13. FILE STRUCTURE
+--------------------------------------------------------------------------------
+
+  cluster-analysis/
+  ├── app.py                      Main Streamlit dashboard (~960 lines)
+  ├── main.ipynb                  Full analysis notebook (37 cells)
+  ├── requirements.txt            Python dependencies (7 packages)
+  ├── .gitignore                  Excludes CSV, __pycache__, .env
+  ├── README.md                   Project documentation
+  ├── PROJECT_OVERVIEW.txt        This file
+  ├── .streamlit/
+  │   └── config.toml             Light theme configuration
+  └── data/                       Pre-computed parquet files (~8MB)
+      ├── df_raw_dedup.parquet    Cleaned deduplicated transactions
+      ├── df_txn.parquet          Transaction-level table
+      ├── df_cust.parquet         Customer-level table with clusters
+      ├── rfm_full.parquet        RFM features + segment labels
+      ├── profile.parquet         Cluster mean profiles
+      ├── seg_revenue.parquet     Revenue and count by segment
+      ├── abc_all.parquet         Product ABC classification
+      ├── abc_summary.parquet     ABC summary statistics
+      ├── missing_by_country.parquet  Anonymous transaction counts
+      └── meta.json               Scalar metrics (k, silhouette, ARI, DB)
+
+
+--------------------------------------------------------------------------------
+14. HOW TO RUN LOCALLY
+--------------------------------------------------------------------------------
+
+  1. Clone the repository:
+       git clone https://github.com/negianiket11-hub/cluster-analysis.git
+       cd cluster-analysis
+
+  2. Install dependencies:
+       pip install -r requirements.txt
+
+  3. Run the dashboard:
+       python -m streamlit run app.py
+
+  4. Open in browser:
+       http://localhost:8501
+
+  Note: The data/ folder is already committed to GitHub. No preprocessing step
+  is needed to run the dashboard. If you want to re-run the notebook analysis
+  from scratch, you will need to download the raw dataset from:
+  https://archive.ics.uci.edu/ml/datasets/online+retail
+
+
+--------------------------------------------------------------------------------
+15. DEPENDENCIES
+--------------------------------------------------------------------------------
+
+  Package          | Version  | Purpose
+  -----------------|----------|------------------------------------------
+  pandas           | latest   | Data manipulation, groupby, merge
+  numpy            | latest   | Numerical ops, percentile thresholds
+  scikit-learn     | latest   | K-Means, DBSCAN, PCA, StandardScaler
+  scipy            | latest   | Hierarchical clustering (dendrogram)
+  plotly           | latest   | All interactive charts
+  streamlit        | >=1.35.0 | Dashboard framework (pinned for altair compat)
+  pyarrow          | latest   | Parquet file I/O
+
+
+================================================================================
+END OF DOCUMENT
+================================================================================
